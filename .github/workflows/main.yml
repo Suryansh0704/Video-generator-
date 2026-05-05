@@ -10,7 +10,7 @@ on:
 
 jobs:
   generate-video:
-    name: Run Anime Video Generator
+    name: Run Dark Minimalism Video Generator
     runs-on: ubuntu-latest
     timeout-minutes: 55
 
@@ -28,12 +28,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             ffmpeg \
-            fonts-liberation
+            libsndfile1 \
+            libgl1
 
       - name: 📦 Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install requests
+          pip install \
+            requests \
+            opencv-python-headless \
+            librosa \
+            numpy \
+            soundfile
 
       - name: 📝 Write script.txt
         run: |
@@ -41,6 +47,7 @@ jobs:
           ${{ github.event.inputs.script_text }}
           SCRIPT_EOF
           echo "✅ script.txt written ($(wc -c < script.txt) bytes)"
+          head -3 script.txt
 
       - name: ⬇️ Download latest audio artifact
         env:
@@ -48,6 +55,7 @@ jobs:
         run: |
           python - <<'PYEOF'
           import requests, os, zipfile, shutil, glob
+
           token = os.environ["GH_TOKEN"]
           headers = {
             "Authorization": f"Bearer {token}",
@@ -90,7 +98,9 @@ jobs:
           echo "✅ Audio duration: ${DURATION}s"
           echo "$DURATION" > audio_duration.txt
 
-      - name: 🎨 Generate anime story video
+      - name: 🎨 Generate dark minimalism video
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: python generate_video.py
 
       - name: ✂️ Trim video to exact audio length
@@ -116,6 +126,7 @@ jobs:
             exit 1
           fi
           echo "✅ raw_video.mp4 ready ($(wc -c < raw_video.mp4) bytes)"
+          ffmpeg -i raw_video.mp4 2>&1 | grep -E "Duration|Video" || true
 
       - name: 📤 Upload video artifact
         uses: actions/upload-artifact@v4
@@ -124,3 +135,16 @@ jobs:
           path: raw_video.mp4
           retention-days: 30
           if-no-files-found: error
+
+      - name: 📊 Write job summary
+        if: success()
+        run: |
+          DURATION=$(cat audio_duration.txt 2>/dev/null || echo "N/A")
+          echo "## 🎨 Dark Minimalism Video Generated" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Style | Dark Minimalism — Procedural |" >> $GITHUB_STEP_SUMMARY
+          echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Engine | OpenCV + Librosa + NumPy |" >> $GITHUB_STEP_SUMMARY
+          echo "| Assets | Zero — 100% procedural |" >> $GITHUB_STEP_SUMMARY
+          echo "⬇️ Download from **Artifacts** above." >> $GITHUB_STEP_SUMMARY
