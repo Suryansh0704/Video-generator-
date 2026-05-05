@@ -1,12 +1,10 @@
 name: 🎬 Generate Video
 
 on:
+  push:
+    paths:
+      - "script.txt"
   workflow_dispatch:
-    inputs:
-      script_text:
-        description: 'Script content'
-        required: true
-        type: string
 
 jobs:
   generate-video:
@@ -41,12 +39,13 @@ jobs:
             numpy \
             soundfile
 
-      - name: 📝 Write script.txt
+      - name: 📄 Verify script.txt
         run: |
-          cat << 'SCRIPT_EOF' > script.txt
-          ${{ github.event.inputs.script_text }}
-          SCRIPT_EOF
-          echo "✅ script.txt written ($(wc -c < script.txt) bytes)"
+          if [ ! -f "script.txt" ]; then
+            echo "❌ script.txt not found"
+            exit 1
+          fi
+          echo "✅ script.txt found ($(wc -c < script.txt) bytes)"
           head -3 script.txt
 
       - name: ⬇️ Download latest audio artifact
@@ -87,7 +86,7 @@ jobs:
             exit(1)
           PYEOF
 
-      - name: ✅ Verify audio + get duration
+      - name: ✅ Verify audio + get exact duration from WAV
         run: |
           if [ ! -f "output_voice.wav" ]; then
             echo "❌ output_voice.wav not found"
@@ -143,8 +142,7 @@ jobs:
           echo "## 🎨 Dark Minimalism Video Generated" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Style | Dark Minimalism — Procedural |" >> $GITHUB_STEP_SUMMARY
-          echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Duration | ${DURATION}s (from WAV file) |" >> $GITHUB_STEP_SUMMARY
           echo "| Engine | OpenCV + Librosa + NumPy |" >> $GITHUB_STEP_SUMMARY
           echo "| Assets | Zero — 100% procedural |" >> $GITHUB_STEP_SUMMARY
           echo "⬇️ Download from **Artifacts** above." >> $GITHUB_STEP_SUMMARY
