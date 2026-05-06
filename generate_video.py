@@ -744,8 +744,13 @@ def composite_phrase_on_canvas(canvas_bgr: np.ndarray,
     canvas_rgb = cv2.cvtColor(canvas_bgr, cv2.COLOR_BGR2RGB)
     canvas_pil = Image.fromarray(canvas_rgb).convert("RGBA")
 
-    # Apply alpha to phrase
-    r, g, b, a = disp.split()
+    # Ensure image is RGBA before splitting
+if disp.mode != 'RGBA':
+    disp = disp.convert('RGBA')
+
+# Apply alpha to phrase
+r, g, b, a = disp.split()
+
     a    = a.point(lambda v: int(v * min(1.0, max(0.0, alpha))))
     disp = Image.merge("RGBA", (r, g, b, a))
 
