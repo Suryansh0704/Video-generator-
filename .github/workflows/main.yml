@@ -8,7 +8,7 @@ on:
 
 jobs:
   generate-video:
-    name: Run Dark Minimalism Video Generator
+    name: Run Kinetic Typography Engine
     runs-on: ubuntu-latest
     timeout-minutes: 55
 
@@ -27,7 +27,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ffmpeg \
             libsndfile1 \
-            libgl1
+            libgl1 \
+            fonts-open-sans \
+            fonts-urw-base35
 
       - name: 📦 Install Python dependencies
         run: |
@@ -37,7 +39,9 @@ jobs:
             opencv-python-headless \
             librosa \
             numpy \
-            soundfile
+            soundfile \
+            Pillow \
+            edge-tts
 
       - name: 📄 Verify script.txt
         run: |
@@ -45,7 +49,7 @@ jobs:
             echo "❌ script.txt not found"
             exit 1
           fi
-          echo "✅ script.txt found ($(wc -c < script.txt) bytes)"
+          echo "✅ script.txt ($(wc -c < script.txt) bytes)"
           head -3 script.txt
 
       - name: ⬇️ Download latest audio artifact
@@ -54,7 +58,6 @@ jobs:
         run: |
           python - <<'PYEOF'
           import requests, os, zipfile, shutil, glob
-
           token = os.environ["GH_TOKEN"]
           headers = {
             "Authorization": f"Bearer {token}",
@@ -80,13 +83,13 @@ jobs:
             wavs = glob.glob("audio_extracted/*.wav")
           if wavs:
             shutil.copy(wavs[0], "output_voice.wav")
-            print(f"✅ output_voice.wav ready ({os.path.getsize('output_voice.wav')} bytes)")
+            print(f"✅ output_voice.wav ({os.path.getsize('output_voice.wav')} bytes)")
           else:
             print("ERROR: No WAV found")
             exit(1)
           PYEOF
 
-      - name: ✅ Verify audio + get exact duration from WAV
+      - name: ✅ Verify audio + get duration
         run: |
           if [ ! -f "output_voice.wav" ]; then
             echo "❌ output_voice.wav not found"
@@ -94,40 +97,33 @@ jobs:
           fi
           DURATION=$(ffprobe -v error -show_entries format=duration \
             -of default=noprint_wrappers=1:nokey=1 output_voice.wav)
-          echo "✅ Audio duration: ${DURATION}s"
+          echo "✅ Audio: ${DURATION}s"
           echo "$DURATION" > audio_duration.txt
 
-      - name: 🎨 Generate dark minimalism video
+      - name: 🎨 Generate kinetic typography video
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: python generate_video.py
 
-      - name: ✂️ Trim video to exact audio length
+      - name: ✂️ Trim to exact audio length
         run: |
           DURATION=$(cat audio_duration.txt)
-          echo "Trimming to ${DURATION}s..."
-          ffmpeg -y \
-            -i raw_video.mp4 \
-            -t "$DURATION" \
-            -c:v libx264 \
-            -preset fast \
-            -crf 18 \
-            -pix_fmt yuv420p \
-            -an \
-            trimmed_video.mp4
-          mv trimmed_video.mp4 raw_video.mp4
+          ffmpeg -y -i raw_video.mp4 -t "$DURATION" \
+            -c:v libx264 -preset fast -crf 17 \
+            -pix_fmt yuv420p -an trimmed.mp4
+          mv trimmed.mp4 raw_video.mp4
           echo "✅ Trimmed to ${DURATION}s"
 
       - name: ✅ Verify output
         run: |
           if [ ! -f "raw_video.mp4" ]; then
-            echo "❌ raw_video.mp4 not created"
+            echo "❌ raw_video.mp4 not found"
             exit 1
           fi
-          echo "✅ raw_video.mp4 ready ($(wc -c < raw_video.mp4) bytes)"
+          echo "✅ $(wc -c < raw_video.mp4) bytes"
           ffmpeg -i raw_video.mp4 2>&1 | grep -E "Duration|Video" || true
 
-      - name: 📤 Upload video artifact
+      - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ github.sha }}
@@ -135,14 +131,11 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: 📊 Write job summary
+      - name: 📊 Summary
         if: success()
         run: |
           DURATION=$(cat audio_duration.txt 2>/dev/null || echo "N/A")
-          echo "## 🎨 Dark Minimalism Video Generated" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Duration | ${DURATION}s (from WAV file) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Engine | OpenCV + Librosa + NumPy |" >> $GITHUB_STEP_SUMMARY
-          echo "| Assets | Zero — 100% procedural |" >> $GITHUB_STEP_SUMMARY
-          echo "⬇️ Download from **Artifacts** above." >> $GITHUB_STEP_SUMMARY
+          echo "## 🎨 Kinetic Typography Video" >> $GITHUB_STEP_SUMMARY
+          echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Engine | OpenCV + PIL + Librosa + Edge-TTS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Style | Kinetic Typography — Procedural |" >> $GITHUB_STEP_SUMMARY
