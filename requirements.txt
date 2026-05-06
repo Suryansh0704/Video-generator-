@@ -3,3 +3,5 @@ opencv-python-headless
 librosa
 numpy
 soundfile
+Pillow
+edge-tts
