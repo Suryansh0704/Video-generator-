@@ -1,4 +1,4 @@
-name: 🎬 Generate Video (Optimized)
+name: 🎬 Generate Video (Fast)
 
 on:
   push:
@@ -20,17 +20,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: 'pip'  # Cache pip dependencies
+          cache: 'pip'
 
-      - name: ⚡ Cache APT packages
-        uses: awalsh128/cache-apt-packages-action@latest
-        with:
-          packages: ffmpeg libsndfile1
-          version: 1.0
-
-      - name: 📦 Install minimal Python dependencies
+      - name: ⚡ Install system dependencies (fast)
         run: |
-          pip install --no-cache-dir --upgrade pip setuptools wheel
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            libsndfile1 \
+            2>&1 | grep -E "^(Setting|Processing|Unpacking|Get:|Hit:|Err:)" || true
+          echo "✅ System dependencies installed"
+
+      - name: 📦 Install Python dependencies (with cache)
+        run: |
+          pip install --upgrade pip setuptools
           pip install --no-cache-dir \
             requests \
             opencv-python-headless \
@@ -39,6 +42,7 @@ jobs:
             soundfile \
             Pillow \
             edge-tts
+          echo "✅ Python dependencies installed"
 
       - name: 📄 Verify script.txt
         run: |
@@ -46,7 +50,8 @@ jobs:
             echo "❌ script.txt not found"
             exit 1
           fi
-          echo "✅ script.txt ($(wc -c < script.txt) bytes)"
+          BYTES=$(wc -c < script.txt)
+          echo "✅ script.txt ($BYTES bytes)"
 
       - name: ⬇️ Download latest audio artifact
         env:
@@ -55,34 +60,41 @@ jobs:
           python - <<'PYEOF'
           import requests, os, zipfile, shutil, glob
           token = os.environ["GH_TOKEN"]
+          if not token:
+              print("ERROR: GH_TOKEN not set")
+              exit(1)
           headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json"
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json"
           }
+          print("[AUDIO] Fetching artifacts list...")
           res = requests.get(
-            "https://api.github.com/repos/Suryansh0704/Audio-generator-/actions/artifacts",
-            headers=headers, timeout=30
+              "https://api.github.com/repos/Suryansh0704/Audio-generator-/actions/artifacts",
+              headers=headers, timeout=30
           )
           artifacts = res.json().get("artifacts", [])
           if not artifacts:
-            print("ERROR: No artifacts found")
-            exit(1)
+              print("ERROR: No artifacts found")
+              exit(1)
           latest = artifacts[0]
-          print(f"Downloading: {latest['name']} ({latest['size_in_bytes']} bytes)")
+          size_kb = latest['size_in_bytes'] / 1024
+          print(f"[AUDIO] Downloading: {latest['name']} ({size_kb:.1f}KB)")
           r = requests.get(latest["archive_download_url"], headers=headers, timeout=60)
           with open("audio.zip", "wb") as f:
-            f.write(r.content)
+              f.write(r.content)
+          print("[AUDIO] Extracting...")
           with zipfile.ZipFile("audio.zip", "r") as z:
-            z.extractall("audio_extracted")
+              z.extractall("audio_extracted")
           wavs = glob.glob("audio_extracted/**/*.wav", recursive=True)
           if not wavs:
-            wavs = glob.glob("audio_extracted/*.wav")
+              wavs = glob.glob("audio_extracted/*.wav")
           if wavs:
-            shutil.copy(wavs[0], "output_voice.wav")
-            print(f"✅ output_voice.wav ({os.path.getsize('output_voice.wav')} bytes)")
+              shutil.copy(wavs[0], "output_voice.wav")
+              wav_size = os.path.getsize('output_voice.wav')
+              print(f"✅ output_voice.wav ({wav_size / 1024:.1f}KB)")
           else:
-            print("ERROR: No WAV found")
-            exit(1)
+              print("ERROR: No WAV found in artifact")
+              exit(1)
           PYEOF
 
       - name: ✅ Verify audio + get duration
@@ -92,8 +104,12 @@ jobs:
             exit 1
           fi
           DURATION=$(ffprobe -v error -show_entries format=duration \
-            -of default=noprint_wrappers=1:nokey=1 output_voice.wav)
-          echo "✅ Audio: ${DURATION}s"
+            -of default=noprint_wrappers=1:nokey=1 output_voice.wav 2>/dev/null)
+          if [ -z "$DURATION" ]; then
+            echo "ERROR: Could not get audio duration"
+            exit 1
+          fi
+          echo "✅ Audio duration: ${DURATION}s"
           echo "$DURATION" > audio_duration.txt
 
       - name: 🎨 Generate kinetic typography video
@@ -103,12 +119,23 @@ jobs:
 
       - name: ✂️ Trim to exact audio length
         run: |
+          if [ ! -f "audio_duration.txt" ]; then
+            echo "ERROR: audio_duration.txt not found"
+            exit 1
+          fi
           DURATION=$(cat audio_duration.txt)
+          echo "[FFMPEG] Trimming video to ${DURATION}s..."
           ffmpeg -y -i raw_video.mp4 -t "$DURATION" \
             -c:v libx264 -preset veryfast -crf 18 \
-            -pix_fmt yuv420p -an trimmed.mp4 2>&1 | grep -E "frame|time" || true
-          mv trimmed.mp4 raw_video.mp4
-          echo "✅ Trimmed to ${DURATION}s"
+            -pix_fmt yuv420p -an trimmed.mp4 \
+            2>&1 | tail -5 || true
+          if [ -f "trimmed.mp4" ]; then
+            mv trimmed.mp4 raw_video.mp4
+            echo "✅ Video trimmed successfully"
+          else
+            echo "ERROR: Trimming failed"
+            exit 1
+          fi
 
       - name: ✅ Verify output
         run: |
@@ -118,7 +145,8 @@ jobs:
           fi
           SIZE=$(wc -c < raw_video.mp4)
           SIZE_MB=$(echo "scale=2; $SIZE / 1048576" | bc)
-          echo "✅ Video size: ${SIZE_MB}MB"
+          echo "✅ Video: $SIZE_MB MB"
+          ffmpeg -i raw_video.mp4 2>&1 | grep -E "Duration|Video:" || true
 
       - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
@@ -134,14 +162,32 @@ jobs:
           DURATION=$(cat audio_duration.txt 2>/dev/null || echo "N/A")
           SIZE=$(wc -c < raw_video.mp4 2>/dev/null || echo "0")
           SIZE_MB=$(echo "scale=2; $SIZE / 1048576" | bc)
+          
           echo "## 🎬 Cinematic Kinetic Typography Video" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Video generated successfully!**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Video Size | ${SIZE_MB}MB |" >> $GITHUB_STEP_SUMMARY
-          echo "| Resolution | 1080x1920 @ 30fps |" >> $GITHUB_STEP_SUMMARY
-          echo "| Engine | OpenCV + PIL + Librosa |" >> $GITHUB_STEP_SUMMARY
-          echo "| Style | Cinematic Kinetic Typography |" >> $GITHUB_STEP_SUMMARY
+          echo "| Duration | \`${DURATION}s\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| File Size | \`${SIZE_MB}MB\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Resolution | \`1080x1920 @ 30fps\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Codec | \`H.264\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✨ Features: Vignette • Film Grain • Chromatic Aberration • Motion Blur • Gradient Waveform" >> $GITHUB_STEP_SUMMARY
+          echo "### ✨ Features Enabled:" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌀 Vignette Overlay (60% intensity)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎬 Film Grain (per-frame noise)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌈 Chromatic Aberration (climax effect)" >> $GITHUB_STEP_SUMMARY
+          echo "- ⚡ Motion Blur (on text entrance)" >> $GITHUB_STEP_SUMMARY
+          echo "- 📈 Gradient Waveform (center-bright)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎯 Dynamic Text Positioning" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔥 Elastic Overshoot Animation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact:** \`video-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🚨 Error Summary
+        if: failure()
+        run: |
+          echo "## ❌ Workflow Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the logs above for details." >> $GITHUB_STEP_SUMMARY
