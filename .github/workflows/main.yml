@@ -1,4 +1,4 @@
-name: 🎬 Generate Video
+name: 🎬 Generate Video (Optimized)
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
   generate-video:
     name: Run Kinetic Typography Engine
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 45
 
     steps:
       - name: ⬇️ Checkout repository
@@ -20,19 +20,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: 'pip'  # Cache pip dependencies
 
-      - name: 📦 Install system dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            ffmpeg \
-            libsndfile1 \
-            libgl1
+      - name: ⚡ Cache APT packages
+        uses: awalsh128/cache-apt-packages-action@latest
+        with:
+          packages: ffmpeg libsndfile1
+          version: 1.0
 
-      - name: 📦 Install Python dependencies
+      - name: 📦 Install minimal Python dependencies
         run: |
-          pip install --upgrade pip
-          pip install \
+          pip install --no-cache-dir --upgrade pip setuptools wheel
+          pip install --no-cache-dir \
             requests \
             opencv-python-headless \
             librosa \
@@ -48,7 +47,6 @@ jobs:
             exit 1
           fi
           echo "✅ script.txt ($(wc -c < script.txt) bytes)"
-          head -3 script.txt
 
       - name: ⬇️ Download latest audio artifact
         env:
@@ -63,7 +61,7 @@ jobs:
           }
           res = requests.get(
             "https://api.github.com/repos/Suryansh0704/Audio-generator-/actions/artifacts",
-            headers=headers
+            headers=headers, timeout=30
           )
           artifacts = res.json().get("artifacts", [])
           if not artifacts:
@@ -71,7 +69,7 @@ jobs:
             exit(1)
           latest = artifacts[0]
           print(f"Downloading: {latest['name']} ({latest['size_in_bytes']} bytes)")
-          r = requests.get(latest["archive_download_url"], headers=headers)
+          r = requests.get(latest["archive_download_url"], headers=headers, timeout=60)
           with open("audio.zip", "wb") as f:
             f.write(r.content)
           with zipfile.ZipFile("audio.zip", "r") as z:
@@ -107,8 +105,8 @@ jobs:
         run: |
           DURATION=$(cat audio_duration.txt)
           ffmpeg -y -i raw_video.mp4 -t "$DURATION" \
-            -c:v libx264 -preset fast -crf 17 \
-            -pix_fmt yuv420p -an trimmed.mp4
+            -c:v libx264 -preset veryfast -crf 18 \
+            -pix_fmt yuv420p -an trimmed.mp4 2>&1 | grep -E "frame|time" || true
           mv trimmed.mp4 raw_video.mp4
           echo "✅ Trimmed to ${DURATION}s"
 
@@ -118,8 +116,9 @@ jobs:
             echo "❌ raw_video.mp4 not found"
             exit 1
           fi
-          echo "✅ $(wc -c < raw_video.mp4) bytes"
-          ffmpeg -i raw_video.mp4 2>&1 | grep -E "Duration|Video" || true
+          SIZE=$(wc -c < raw_video.mp4)
+          SIZE_MB=$(echo "scale=2; $SIZE / 1048576" | bc)
+          echo "✅ Video size: ${SIZE_MB}MB"
 
       - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
@@ -133,7 +132,16 @@ jobs:
         if: success()
         run: |
           DURATION=$(cat audio_duration.txt 2>/dev/null || echo "N/A")
-          echo "## 🎨 Kinetic Typography Video" >> $GITHUB_STEP_SUMMARY
+          SIZE=$(wc -c < raw_video.mp4 2>/dev/null || echo "0")
+          SIZE_MB=$(echo "scale=2; $SIZE / 1048576" | bc)
+          echo "## 🎬 Cinematic Kinetic Typography Video" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Engine | OpenCV + PIL + Librosa + Edge-TTS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Style | Kinetic Typography — Procedural |" >> $GITHUB_STEP_SUMMARY
+          echo "| Video Size | ${SIZE_MB}MB |" >> $GITHUB_STEP_SUMMARY
+          echo "| Resolution | 1080x1920 @ 30fps |" >> $GITHUB_STEP_SUMMARY
+          echo "| Engine | OpenCV + PIL + Librosa |" >> $GITHUB_STEP_SUMMARY
+          echo "| Style | Cinematic Kinetic Typography |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✨ Features: Vignette • Film Grain • Chromatic Aberration • Motion Blur • Gradient Waveform" >> $GITHUB_STEP_SUMMARY
