@@ -1,7 +1,8 @@
 """
-generate_video.py — Kinetic Physics Engine v3
-==============================================
-Physics-Based Typography + Climax Shake + Stagger + CAPS Flash
+generate_video.py — Cinematic Kinetic Physics Engine v4
+========================================================
+Physics-Based Typography + Chromatic Aberration + Film Grain + Motion Blur
++ Gradient Waveform + Dynamic Positioning + Neon Glow
 All headless — runs on GitHub Actions.
 Output: raw_video.mp4 (1080x1920, 30fps, no audio)
 """
@@ -61,9 +62,9 @@ WORD_COLORS_BGR = [
     (200, 222, 240),
 ]
 
-# ── Accent — gold/amber for CAPS ─────────────────────────────────
+# ── Accent — Electric Crimson for CAPS/quotes ──────────────────
 ACCENT_COLORS_BGR = [
-    (60,  180, 255),
+    (60,  180, 255),    # Electric Crimson (BGR: Blue-heavy neon)
     (80,  190, 240),
     (50,  165, 220),
     (90,  200, 255),
@@ -89,27 +90,39 @@ PHRASE_Y_CENTER  = int(H * 0.38)
 
 # Entrance vectors
 ENTRANCE_TYPES  = ["fly_left", "fly_right", "fly_top", "vertical"]
-VERTICAL_CHANCE = 0.15   # 15% of phrases get vertical rotation
+VERTICAL_CHANCE = 0.15
+
+# ── Dynamic Positioning (randomized within 60% center screen) ────
+DYNAMIC_POS_ENABLED  = True
+DYNAMIC_POS_RANGE    = 0.60   # ±30% horizontal, ±30% vertical
 
 # ── Stagger / linger ─────────────────────────────────────────────
-LINGER_FRAMES    = int(FPS * 0.30)   # Previous phrase lingers 0.3s
-LINGER_ALPHA     = 0.40              # At 40% opacity
+LINGER_FRAMES    = int(FPS * 0.30)
+LINGER_ALPHA     = 0.40
 
 # ── Climax (last 5 seconds) ───────────────────────────────────────
-CLIMAX_SECS       = 5.0
-SHAKE_AMPLITUDE   = 10               # ±10 pixels
-SHAKE_FREQ        = 1                # Every frame (high-frequency)
-CLIMAX_GLOW_MULT  = 2.2              # Waveform glow multiplier
-CLIMAX_TEXT_BOOST = 1.08             # Text scale boost during climax
+CLIMAX_SECS          = 5.0
+SHAKE_AMPLITUDE      = 10
+SHAKE_FREQ           = 1
+CLIMAX_GLOW_MULT     = 2.2
+CLIMAX_TEXT_BOOST    = 1.08
+CHROMATIC_SHIFT      = (5, 10)   # R & B shift 5-10px
+CHROMATIC_INTENSITY  = 0.6
 
 # ── CAPS flash ────────────────────────────────────────────────────
-CAPS_FLASH_FRAMES = 2                # 2-frame flash
-CAPS_PULSE_SCALE  = 1.18             # Pulse scale on CAPS words
+CAPS_FLASH_FRAMES = 2
+CAPS_PULSE_SCALE  = 1.18
 
-# ── Waveform ─────────────────────────────────────────────────────
-WAVE_Y_BASE  = int(H * 0.82)
-WAVE_HEIGHT  = int(H * 0.14)
-WAVE_POINTS  = 200
+# ── Waveform ──────────────────────────────────────────────────────
+WAVE_Y_BASE     = int(H * 0.82)
+WAVE_HEIGHT     = int(H * 0.14)
+WAVE_POINTS     = 200
+WAVEFORM_STYLE  = "gradient"  # "solid" or "gradient"
+
+# ── Atmospheric Effects ───────────────────────────────────────────
+VIGNETTE_INTENSITY = 0.60    # 60% intensity
+FILM_GRAIN_SCALE   = 0.08    # 8% high-frequency noise
+MOTION_BLUR_PX     = 10      # 10-pixel motion blur
 
 # ── Ken Burns ────────────────────────────────────────────────────
 KB_START = 1.0
@@ -277,7 +290,6 @@ def group_into_phrases(word_timestamps: list, duration: float) -> list:
         has_caps    = bool(re.search(r'[A-Z]{2,}', text))
         is_climax   = start_sec >= climax_start
 
-        # Entrance type — 15% vertical, rest fly
         r = random.random()
         if r < VERTICAL_CHANCE:
             entrance = "vertical"
@@ -298,7 +310,6 @@ def group_into_phrases(word_timestamps: list, duration: float) -> list:
         })
         i += WORDS_PER_PHRASE
 
-    # Mark last phrase as climax too
     if phrases:
         phrases[-1]["is_climax"] = True
 
@@ -312,10 +323,11 @@ def group_into_phrases(word_timestamps: list, duration: float) -> list:
 # ══════════════════════════════════════════════════════════════════
 
 def elastic_out(t: float) -> float:
-    """0.4x → 1.1x → 1.0x spring."""
+    """Elastic overshoot: 0.4x → 1.15x → 1.0x spring."""
     if t <= 0: return 0.0
     if t >= 1: return 1.0
-    return 1 + (2**(-10*t)) * math.sin((t - 0.075) * (2*math.pi) / 0.3)
+    c5 = (2 * math.pi) / 4.5
+    return 1 + (2**(-10*t)) * math.sin((t - 0.075) * c5)
 
 
 def ease_out_quad(t: float) -> float:
@@ -323,7 +335,39 @@ def ease_out_quad(t: float) -> float:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PHRASE IMAGE RENDERER
+#  NEON GLOW EFFECT (for CAPS & quoted text)
+# ══════════════════════════════════════════════════════════════════
+
+def apply_neon_glow(img_pil: Image.Image, glow_color_bgr: tuple,
+                    glow_radius: int = 8) -> Image.Image:
+    """Apply neon glow blur to image."""
+    img_rgb = img_pil.convert("RGBA")
+    r, g, b, a = img_rgb.split()
+
+    # Create glow layer
+    glow = Image.new("RGBA", img_rgb.size, (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glow)
+    pixels = img_rgb.load()
+    size = img_rgb.size
+
+    for y in range(size[1]):
+        for x in range(size[0]):
+            if pixels[x, y][3] > 200:
+                glow_draw.ellipse(
+                    [(x-glow_radius, y-glow_radius),
+                     (x+glow_radius, y+glow_radius)],
+                    fill=glow_color_bgr + (60,)
+                )
+
+    # Composite glow under text
+    result = Image.new("RGBA", img_rgb.size, (0, 0, 0, 0))
+    result.paste(glow, (0, 0), glow)
+    result.alpha_composite(img_rgb)
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════
+#  PHRASE IMAGE RENDERER (with dynamic positioning)
 # ══════════════════════════════════════════════════════════════════
 
 def render_phrase_image(text: str, has_caps: bool,
@@ -341,14 +385,13 @@ def render_phrase_image(text: str, has_caps: bool,
     for w in words:
         is_cap = bool(re.search(r'[A-Z]{2,}', w))
         size   = CAPS_SIZE if is_cap else NORMAL_SIZE
-        # Climax words get a slight size boost
         if is_climax:
             size = int(size * CLIMAX_TEXT_BOOST)
         color  = accent_bgr if is_cap else word_bgr
         font   = get_font(size)
-        tmp    = Image.new("RGBA", (1,1))
+        tmp    = Image.new("RGBA", (1, 1))
         draw   = ImageDraw.Draw(tmp)
-        bbox   = draw.textbbox((0,0), w, font=font)
+        bbox   = draw.textbbox((0, 0), w, font=font)
         word_data.append({
             "text":  w, "font": font, "color": color,
             "w": bbox[2]-bbox[0], "h": bbox[3]-bbox[1],
@@ -371,7 +414,7 @@ def render_phrase_image(text: str, has_caps: bool,
     tot_h   = sum(lh_list) + LINE_SP*(len(lines)-1) + PAD*2
     tot_w   = W - 60
 
-    img  = Image.new("RGBA", (tot_w, tot_h), (0,0,0,0))
+    img  = Image.new("RGBA", (tot_w, tot_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     y = PAD
@@ -382,17 +425,54 @@ def render_phrase_image(text: str, has_caps: bool,
         for wd in line:
             rgb = (wd["color"][2], wd["color"][1], wd["color"][0])
             draw.text((x+3, y+3), wd["text"], font=wd["font"],
-                      fill=(0,0,0,140))
+                      fill=(0, 0, 0, 140))
             draw.text((x, y), wd["text"], font=wd["font"],
                       fill=rgb+(255,))
+
+            # Neon glow for CAPS
             if wd["is_cap"]:
                 acc_rgb = (accent_bgr[2], accent_bgr[1], accent_bgr[0])
                 draw.line([(x, y+wd["h"]+4), (x+wd["w"], y+wd["h"]+4)],
                           fill=acc_rgb+(200,), width=3)
-            x += wd["w"] + 18
+                # Glow around CAPS
+                for r in [2, 4, 6]:
+                    alpha = max(0, 80 - r*15)
+                    draw.ellipse(
+                        [(x-r, y-r), (x+wd["w"]+r, y+wd["h"]+r)],
+                        outline=acc_rgb+(alpha,), width=1
+                    )
+
         y += lh + LINE_SP
 
     return img
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DYNAMIC POSITIONING (randomize within 60% center)
+# ══════════════════════════════════════════════════════════════════
+
+def get_dynamic_position(phrase_idx: int, iw: int, ih: int) -> tuple:
+    """Randomize text position within center 60% of screen."""
+    if not DYNAMIC_POS_ENABLED:
+        return (W - iw) // 2, PHRASE_Y_CENTER - ih // 2
+
+    # Seeded by phrase index for consistency across frames
+    rng = np.random.RandomState(phrase_idx * 123 + 456)
+
+    # Randomize ±30% horizontally
+    h_range = int(W * DYNAMIC_POS_RANGE * 0.5)
+    x_offset = rng.randint(-h_range, h_range + 1)
+    tx = (W - iw) // 2 + x_offset
+
+    # Randomize ±30% vertically
+    v_range = int(H * DYNAMIC_POS_RANGE * 0.3)
+    y_offset = rng.randint(-v_range, v_range + 1)
+    ty = PHRASE_Y_CENTER - ih // 2 + y_offset
+
+    # Clamp to screen
+    tx = max(0, min(tx, W - iw))
+    ty = max(0, min(ty, H - ih))
+    return tx, ty
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -403,15 +483,15 @@ def get_entrance_offset(entrance: str, frame_in: int,
                         total: int, iw: int, ih: int) -> tuple:
     """
     Returns (x_offset, y_offset, scale, alpha) for entrance frame.
-    Elastic-out spring: 0.4x → 1.1x → 1.0x
+    Elastic-Overshoot easing: 0.5 -> 1.15 -> 1.0
     """
     t = min(1.0, frame_in / max(1, total-1))
     e = elastic_out(t)
 
     alpha = min(1.0, t * 3.0)
 
-    # Scale: 0.4 at t=0, peaks ~1.1, settles 1.0 (elastic handles this)
-    scale = 0.4 + e * 0.7   # 0.4 + elastic * 0.7
+    # Scale: 0.5 at t=0, peaks ~1.15, settles 1.0
+    scale = 0.5 + e * 0.65
 
     if entrance == "fly_left":
         x_off = int((1-e) * (-iw - 80))
@@ -432,23 +512,79 @@ def get_entrance_offset(entrance: str, frame_in: int,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  CLIMAX SHAKE — random pixel offset per frame
+#  MOTION BLUR (for text entering from sides/top/bottom)
+# ══════════════════════════════════════════════════════════════════
+
+def apply_motion_blur(img: Image.Image, entrance: str,
+                      frame_in: int, total: int) -> Image.Image:
+    """Apply directional motion blur based on entrance type."""
+    if entrance == "vertical":
+        return img
+
+    progress = min(1.0, frame_in / max(1, total-1))
+    if progress < 0.7:  # Only blur during early entrance
+        blur_amt = int(MOTION_BLUR_PX * (1 - progress))
+        if blur_amt > 1:
+            if entrance in ["fly_left", "fly_right"]:
+                # Horizontal motion blur
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_RECT, (blur_amt, 1)
+                )
+            else:
+                # Vertical motion blur
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_RECT, (1, blur_amt)
+                )
+            # Convert PIL to cv2, apply blur, convert back
+            cv2_img = cv2.cvtColor(
+                np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR
+            )
+            cv2_img = cv2.filter2D(cv2_img, -1, kernel)
+            img = Image.fromarray(
+                cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
+            )
+    return img
+
+
+# ══════════════════════════════════════════════════════════════════
+#  CLIMAX SHAKE & CHROMATIC ABERRATION
 # ══════════════════════════════════════════════════════════════════
 
 def get_shake_offset(frame_idx: int, is_climax: bool) -> tuple:
     """High-frequency per-frame shake during climax."""
     if not is_climax:
         return 0, 0
-    # Deterministic but chaotic per frame
     rng  = np.random.RandomState(frame_idx * 7 + 13)
     sx   = int(rng.randint(-SHAKE_AMPLITUDE, SHAKE_AMPLITUDE+1))
     sy   = int(rng.randint(-SHAKE_AMPLITUDE//2, SHAKE_AMPLITUDE//2+1))
     return sx, sy
 
 
+def apply_chromatic_aberration(canvas: np.ndarray,
+                                frame_idx: int) -> np.ndarray:
+    """Shift R and B channels by 5-10px randomly."""
+    rng = np.random.RandomState(frame_idx * 11 + 7)
+    shift_r = rng.randint(CHROMATIC_SHIFT[0], CHROMATIC_SHIFT[1]+1)
+    shift_b = rng.randint(CHROMATIC_SHIFT[0], CHROMATIC_SHIFT[1]+1)
+
+    b, g, r = cv2.split(canvas)
+
+    M_r = np.float32([[1, 0, shift_r], [0, 1, 0]])
+    M_b = np.float32([[1, 0, -shift_b], [0, 1, 0]])
+
+    r_shift = cv2.warpAffine(r, M_r, (W, H),
+                             borderMode=cv2.BORDER_REPLICATE)
+    b_shift = cv2.warpAffine(b, M_b, (W, H),
+                             borderMode=cv2.BORDER_REPLICATE)
+
+    result = cv2.merge([b_shift, g, r_shift])
+    return cv2.addWeighted(result, CHROMATIC_INTENSITY,
+                           canvas, 1 - CHROMATIC_INTENSITY, 0)
+
+
 def apply_shake_to_canvas(canvas: np.ndarray,
                            sx: int, sy: int) -> np.ndarray:
-    """Shift entire canvas by (sx, sy), fill edges with bg color."""
+    """Shift entire canvas by (sx, sy)."""
     if sx == 0 and sy == 0:
         return canvas
     M      = np.float32([[1, 0, sx], [0, 1, sy]])
@@ -459,12 +595,51 @@ def apply_shake_to_canvas(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  WAVEFORM WITH GLOW (climax boost)
+#  FILM GRAIN (high-frequency noise per frame)
 # ══════════════════════════════════════════════════════════════════
 
-def draw_waveform(canvas: np.ndarray, wave: np.ndarray,
-                  rms: float, wave_bgr: tuple,
-                  is_climax: bool = False) -> None:
+def apply_film_grain(canvas: np.ndarray, frame_idx: int) -> np.ndarray:
+    """Apply high-frequency film grain noise that changes every frame."""
+    rng = np.random.RandomState(frame_idx * 43 + 91)
+    grain = rng.normal(0, 1, canvas.shape).astype(np.float32)
+    grain = (grain * 255 * FILM_GRAIN_SCALE).astype(np.int16)
+
+    result = canvas.astype(np.int16) + grain
+    result = np.clip(result, 0, 255).astype(np.uint8)
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════
+#  VIGNETTE (60% intensity)
+# ══════════════════════════════════════════════════════════════════
+
+def build_vignette(intensity: float = VIGNETTE_INTENSITY) -> np.ndarray:
+    """Create vignette mask (0 at edges, 1 at center)."""
+    xs = np.linspace(-1, 1, W)
+    ys = np.linspace(-1, 1, H)
+    X, Y = np.meshgrid(xs, ys)
+    dist = np.sqrt(X**2 + Y**2)
+    mask = 1.0 - np.clip(dist / dist.max() * intensity, 0, 1)
+    return mask.reshape(H, W, 1).astype(np.float32)
+
+
+def apply_vignette(canvas: np.ndarray, vignette: np.ndarray) -> np.ndarray:
+    """Apply vignette mask to canvas."""
+    cf = canvas.astype(np.float32) / 255.0 * vignette
+    return (cf * 255).clip(0, 255).astype(np.uint8)
+
+
+# ══════════════════════════════════════════════════════════════════
+#  WAVEFORM WITH GRADIENT & GLOW (climax boost)
+# ══════════════════════════════════════════════════════════════════
+
+def draw_waveform_gradient(canvas: np.ndarray, wave: np.ndarray,
+                           rms: float, wave_bgr: tuple,
+                           is_climax: bool = False) -> None:
+    """
+    Draw waveform as gradient line: brightest in center,
+    tapers off at edges.
+    """
     glow_mult = CLIMAX_GLOW_MULT if is_climax else 1.0
     amp  = WAVE_HEIGHT * (0.15 + rms * 0.85)
     xs   = np.linspace(80, W-80, WAVE_POINTS).astype(int)
@@ -473,37 +648,33 @@ def draw_waveform(canvas: np.ndarray, wave: np.ndarray,
     ys   = np.clip((WAVE_Y_BASE - ws * amp).astype(int), 10, H-10)
     pts  = np.stack([xs, ys], axis=1).reshape(-1, 1, 2)
 
+    # Gradient colors: center bright, edges dark
     glow = tuple(max(0, int(c * 0.35)) for c in wave_bgr)
+
+    # Multi-pass glow with gradient intensity
     passes = [
-        (int(20 * glow_mult), glow,     0.25 * min(1.0, glow_mult * 0.6)),
-        (int(12 * glow_mult), glow,     0.45 * min(1.0, glow_mult * 0.7)),
-        (5,                   wave_bgr, 0.80),
-        (2,                   (240, 245, 255), 1.0)
+        (int(20 * glow_mult), glow, 0.25 * min(1.0, glow_mult * 0.6)),
+        (int(12 * glow_mult), glow, 0.45 * min(1.0, glow_mult * 0.7)),
+        (5, wave_bgr, 0.80),
+        (2, (240, 245, 255), 1.0)
     ]
+
     for thick, col, alpha in passes:
         ov = canvas.copy()
-        cv2.polylines(ov, [pts], False, col, max(1,thick), cv2.LINE_AA)
+        cv2.polylines(ov, [pts], False, col, max(1, thick), cv2.LINE_AA)
         cv2.addWeighted(ov, alpha, canvas, 1-alpha, 0, canvas)
 
+    # Peak marker with glow
     pi = int(np.argmax(np.abs(ws)))
     px, py = int(xs[pi]), int(ys[pi])
     r_size = 8 if not is_climax else 12
-    cv2.circle(canvas, (px, py), r_size, (255,255,255), -1)
+    cv2.circle(canvas, (px, py), r_size, (255, 255, 255), -1)
     cv2.circle(canvas, (px, py), r_size+5, wave_bgr, 2)
 
 
 # ══════════════════════════════════════════════════════════════════
-#  VIGNETTE + KEN BURNS
+#  KEN BURNS (subtle zoom)
 # ══════════════════════════════════════════════════════════════════
-
-def build_vignette() -> np.ndarray:
-    xs = np.linspace(-1, 1, W)
-    ys = np.linspace(-1, 1, H)
-    X, Y = np.meshgrid(xs, ys)
-    dist = np.sqrt(X**2 + Y**2)
-    mask = 1.0 - np.clip(dist / dist.max() * 0.6, 0, 1)
-    return mask.reshape(H, W, 1).astype(np.float32)
-
 
 def apply_ken_burns(frame: np.ndarray,
                     idx: int, total: int) -> np.ndarray:
@@ -520,7 +691,7 @@ def apply_ken_burns(frame: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE PHRASE (with entrance physics)
+#  COMPOSITE PHRASE (with entrance physics & motion blur)
 # ══════════════════════════════════════════════════════════════════
 
 def composite_phrase_on_canvas(canvas_bgr: np.ndarray,
@@ -528,19 +699,19 @@ def composite_phrase_on_canvas(canvas_bgr: np.ndarray,
                                 frame_in: int,
                                 frame_out: int,
                                 entrance: str,
+                                phrase_idx: int,
                                 alpha_override: float = None) -> None:
     iw, ih = phrase_img.size
-    tx     = (W - iw) // 2
-    ty     = PHRASE_Y_CENTER - ih // 2
+
+    # Get dynamic position
+    tx, ty = get_dynamic_position(phrase_idx, iw, ih)
 
     # Determine animation state
     if frame_in < ANIM_IN_FRAMES:
-        # Entrance animation
         x_off, y_off, scale, alpha = get_entrance_offset(
             entrance, frame_in, ANIM_IN_FRAMES, iw, ih
         )
     elif frame_out < ANIM_OUT_FRAMES:
-        # Exit fade
         x_off, y_off = 0, 0
         scale = 1.0
         alpha = frame_out / ANIM_OUT_FRAMES
@@ -558,11 +729,15 @@ def composite_phrase_on_canvas(canvas_bgr: np.ndarray,
         nw   = max(1, int(iw * scale))
         nh   = max(1, int(ih * scale))
         disp = phrase_img.resize((nw, nh), Image.LANCZOS)
-        tx   = (W - nw) // 2
-        ty   = PHRASE_Y_CENTER - nh // 2
+        tx   = tx + (iw - nw) // 2
+        ty   = ty + (ih - nh) // 2
+
+    # Apply motion blur during entrance
+    if frame_in < ANIM_IN_FRAMES and entrance != "vertical":
+        disp = apply_motion_blur(disp, entrance, frame_in, ANIM_IN_FRAMES)
 
     # Apply offsets
-    px = max(-disp.width,  min(W, tx + x_off))
+    px = max(-disp.width, min(W, tx + x_off))
     py = max(-disp.height, min(H, ty + y_off))
 
     # Convert canvas to PIL RGBA
@@ -590,7 +765,6 @@ def apply_caps_flash(canvas: np.ndarray, intensity: float,
                      bg_bgr: tuple) -> np.ndarray:
     if intensity <= 0:
         return canvas
-    # Lighten background — add a warm white flash
     overlay = np.full_like(canvas, (200, 215, 230), dtype=np.uint8)
     return cv2.addWeighted(canvas, 1 - intensity * 0.18,
                            overlay, intensity * 0.18, 0)
@@ -615,6 +789,8 @@ def render_video(phrases: list, rms_arr: np.ndarray,
         sys.exit("[ERROR] VideoWriter failed")
 
     print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases")
+    print("[RENDER] Features: Vignette | Film Grain | Chromatic Aberration")
+    print("          Motion Blur | Gradient Waveform | Dynamic Position")
 
     # Pre-render phrase images
     print("[RENDER] Pre-rendering phrases...")
@@ -648,9 +824,9 @@ def render_video(phrases: list, rms_arr: np.ndarray,
         # ── Background ───────────────────────────────────────────
         canvas = np.full((H, W, 3), bg_bgr, dtype=np.uint8)
 
-        # ── Waveform ─────────────────────────────────────────────
-        draw_waveform(canvas, wave_arr[i], rms_arr[i],
-                      wave_bgr, is_climax)
+        # ── Waveform (gradient + glow) ─────────────────────────
+        draw_waveform_gradient(canvas, wave_arr[i], rms_arr[i],
+                               wave_bgr, is_climax)
 
         # ── Stagger: linger previous phrase at 40% opacity ────────
         cur_phrase = frame_phrase.get(i)
@@ -660,7 +836,6 @@ def render_video(phrases: list, rms_arr: np.ndarray,
                 cur_phrase["pi"] != prev_phrase["pi"]):
             frames_since_end = i - prev_phrase["ef"]
             if frames_since_end < LINGER_FRAMES:
-                # Draw prev phrase at 40% opacity (fading)
                 linger_alpha = LINGER_ALPHA * (
                     1 - frames_since_end / LINGER_FRAMES
                 )
@@ -669,6 +844,7 @@ def render_video(phrases: list, rms_arr: np.ndarray,
                     canvas, prev_phrase["img"],
                     lf_in, 999,
                     prev_phrase["entrance"],
+                    prev_phrase["pi"],
                     alpha_override=linger_alpha
                 )
 
@@ -686,7 +862,8 @@ def render_video(phrases: list, rms_arr: np.ndarray,
             composite_phrase_on_canvas(
                 canvas, cur_phrase["img"],
                 frame_in, frame_out,
-                cur_phrase["entrance"]
+                cur_phrase["entrance"],
+                cur_phrase["pi"]
             )
             prev_phrase = cur_phrase
 
@@ -696,17 +873,20 @@ def render_video(phrases: list, rms_arr: np.ndarray,
             canvas    = apply_caps_flash(canvas, intensity, bg_bgr)
             caps_flash -= 1
 
-        # ── Vignette ─────────────────────────────────────────────
-        cf     = canvas.astype(np.float32) / 255.0 * vignette
-        canvas = (cf * 255).clip(0, 255).astype(np.uint8)
+        # ── Vignette (60% intensity) ────────────────────────────
+        canvas = apply_vignette(canvas, vignette)
 
-        # ── Ken Burns ────────────────────────────────────────────
+        # ── Film Grain (high-frequency, per-frame) ──────────────
+        canvas = apply_film_grain(canvas, i)
+
+        # ── Ken Burns (subtle zoom) ──────────────────────────────
         canvas = apply_ken_burns(canvas, i, n_frames)
 
-        # ── Climax shake — applied LAST so it shakes everything ──
+        # ── Climax: Chromatic Aberration Shake ─────────────────
         if is_climax:
             sx, sy = get_shake_offset(i, True)
             canvas = apply_shake_to_canvas(canvas, sx, sy)
+            canvas = apply_chromatic_aberration(canvas, i)
 
         writer.write(canvas)
 
@@ -738,10 +918,11 @@ def render_video(phrases: list, rms_arr: np.ndarray,
 # ══════════════════════════════════════════════════════════════════
 
 def main():
-    print("=" * 62)
-    print("  Kinetic Physics Engine v3")
-    print("  Elastic · Shake · Stagger · Flash · Climax")
-    print("=" * 62)
+    print("=" * 70)
+    print("  🎬 Cinematic Kinetic Physics Engine v4 🎬")
+    print("  Vignette · Film Grain · Chromatic Aberration · Motion Blur")
+    print("  Gradient Waveform · Dynamic Position · Elastic Overshoot")
+    print("=" * 70)
 
     ensure_font()
 
@@ -760,6 +941,9 @@ def main():
     accent_bgr = random.choice(ACCENT_COLORS_BGR)
     wave_bgr   = random.choice(WAVE_COLORS_BGR)
     word_bgr   = random.choice(WORD_COLORS_BGR)
+
+    print(f"[PALETTE] BG: {bg_bgr} | Accent: {accent_bgr}")
+    print(f"          Word: {word_bgr} | Wave: {wave_bgr}")
 
     # Audio duration
     cmd = [
@@ -797,9 +981,9 @@ def main():
     render_video(phrases, rms_arr, wave_arr, duration,
                  bg_bgr, accent_bgr, wave_bgr, word_bgr)
 
-    print("\n" + "=" * 62)
-    print("  [✓] DONE — raw_video.mp4 ready")
-    print("=" * 62)
+    print("\n" + "=" * 70)
+    print("  [✓] CINEMATIC VIDEO GENERATED — raw_video.mp4 ready")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
