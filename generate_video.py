@@ -1,17 +1,10 @@
 """
-generate_video.py — Cinematic Kinetic Engine v4
+generate_video.py — Cinematic Kinetic Engine v5
 ================================================
-Maximum retention · Atmospheric · Cinematic Masterpiece
-- Film grain (per frame)
-- Vignette 60%
-- Dynamic text positioning (center 60%)
-- Elastic overshoot 0.5→1.15→1.0
-- Neon glow on CAPS/quotes (Electric Crimson)
-- Chromatic aberration shake in climax
-- Motion blur on fly-in words
-- Gradient waveform (center bright → edges taper)
-- Climax waveform color shift + 2x amplitude
-Output: raw_video.mp4 (1080×1920, 30fps, no audio)
+Warm fruit-tone backgrounds: Peach, Pink, Coral, Apricot etc.
+Dark rich word colors for contrast on light backgrounds.
+Text fully clamped to screen — never goes off edge.
+Colorful 35% random accent words + ALL CAPS neon glow.
 """
 
 import os, re, sys, glob, math, random, shutil
@@ -22,7 +15,7 @@ import numpy as np
 import cv2
 
 try:
-    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+    from PIL import Image, ImageDraw, ImageFont
 except ImportError:
     sys.exit("[ERROR] Pillow not installed")
 
@@ -53,22 +46,59 @@ OUTPUT_VIDEO = Path("raw_video.mp4")
 FONT_PATH    = Path("Montserrat-Bold.ttf")
 FONT_URL     = "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-Bold.ttf"
 
-# ── Backgrounds — near-black warm ────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+#  COLOUR PALETTE
+# ══════════════════════════════════════════════════════════════════
+
+# Warm fruit-tone backgrounds — BGR format
 BACKGROUNDS_BGR = [
-    (5,  6,  8), (8, 7, 10), (6, 8, 9), (7, 6, 11), (9, 8, 7),
+    (185, 175, 255),   # Peach
+    (193, 182, 255),   # Apricot
+    (170, 160, 255),   # Nectarine
+    (200, 182, 255),   # Creamsicle
+    (180, 160, 250),   # Papaya
+    (190, 150, 240),   # Guava
+    (170, 140, 255),   # Salmon
+    (160, 130, 255),   # Coral
+    (175, 120, 240),   # Terra Cotta
+    (200, 170, 255),   # Melon
+    (210, 190, 255),   # Shell Pink
+    (180, 180, 255),   # Pink (warm)
+    (130, 210, 150),   # Lime
+    (140, 200, 255),   # Soft Orange
 ]
 
-# ── Word colors — warm cream/ivory ───────────────────────────────
+# Dark word colors — rich and readable on warm light backgrounds
 WORD_COLORS_BGR = [
-    (210, 230, 245), (220, 238, 255), (200, 222, 240),
+    (25,  20,  100),   # Deep burgundy
+    (15,  40,  130),   # Deep brown-red
+    (10,  60,  120),   # Chocolate
+    (30,  20,  140),   # Dark crimson
+    (50,  30,  110),   # Deep plum
+    (20,  80,  100),   # Dark burnt orange
+    (40,  25,  120),   # Rich maroon
+    (10,  50,  90),    # Mahogany
 ]
 
-# ── Electric Crimson accent (neon glow for CAPS/quotes) ──────────
-CRIMSON_BGR       = (60,  30, 220)   # BGR: Electric Crimson
-CRIMSON_GLOW_BGR  = (40,  10, 160)   # Darker glow layer
+# Accent colors — vivid, pop on warm backgrounds
+ACCENT_COLORS_BGR = [
+    (20,  10,  200),   # Deep red
+    (10,  80,  220),   # Bright orange
+    (0,   150, 200),   # Deep gold
+    (80,  20,  180),   # Purple-red
+    (0,   100, 180),   # Burnt amber
+    (40,  0,   160),   # Dark crimson accent
+    (100, 40,  200),   # Violet-red
+]
 
-# ── Waveform base color (transitions to crimson in climax) ───────
-WAVE_BASE_BGR     = (180, 255, 50)   # Neon lime base
+# Waveform — dark so it shows on light background
+WAVE_COLORS_BGR = [
+    (60,  30,  140),   # Deep purple
+    (20,  20,  180),   # Deep crimson
+    (30,  80,  160),   # Dark burnt orange
+    (10,  60,  120),   # Dark chocolate
+    (80,  20,  160),   # Deep plum
+]
 
 # ── Typography ───────────────────────────────────────────────────
 WORDS_PER_PHRASE    = 4
@@ -78,37 +108,40 @@ ANIM_OUT_FRAMES     = int(FPS * 0.15)
 LINGER_FRAMES       = int(FPS * 0.30)
 LINGER_ALPHA        = 0.40
 VERTICAL_CHANCE     = 0.12
+ACCENT_WORD_CHANCE  = 0.35   # 35% random words get accent color
 
-# Dynamic positioning — center 60% of screen
-POS_X_MIN = int(W * 0.20)
-POS_X_MAX = int(W * 0.80)
-POS_Y_MIN = int(H * 0.22)
-POS_Y_MAX = int(H * 0.62)
+# Safe zone — text always inside these bounds
+SAFE_PAD = 40
+POS_X_MIN = int(W * 0.08)
+POS_X_MAX = int(W * 0.92)
+POS_Y_MIN = int(H * 0.18)
+POS_Y_MAX = int(H * 0.60)
 
-# Elastic overshoot config
-ELASTIC_START_SCALE = 0.5
-ELASTIC_PEAK_SCALE  = 1.15
-ELASTIC_END_SCALE   = 1.0
+# ── Physics ───────────────────────────────────────────────────────
+ELASTIC_START = 0.5
+ELASTIC_PEAK  = 1.15
 
-# ── Film grain ───────────────────────────────────────────────────
-GRAIN_INTENSITY  = 18    # 0-255, how strong the grain is
-GRAIN_BLEND      = 0.06  # How much grain blends into frame
+# ── Effects ───────────────────────────────────────────────────────
+GRAIN_INTENSITY = 12
+GRAIN_BLEND     = 0.04
+VIGNETTE_STR    = 0.45
+MOTION_BLUR_PX  = 10
 
-# ── Vignette ─────────────────────────────────────────────────────
-VIGNETTE_STRENGTH = 0.60
-
-# ── Motion blur ──────────────────────────────────────────────────
-MOTION_BLUR_PX   = 10    # Pixels of blur during fly-in
+# ── Waveform ─────────────────────────────────────────────────────
+WAVE_Y_BASE  = int(H * 0.82)
+WAVE_HEIGHT  = int(H * 0.13)
+WAVE_POINTS  = 200
 
 # ── Climax ───────────────────────────────────────────────────────
-CLIMAX_SECS       = 5.0
-SHAKE_AMP         = 10
-CHROMA_SHIFT      = 8    # Pixels to shift R/B channels
-CLIMAX_WAVE_MULT  = 2.0  # Amplitude multiplier
+CLIMAX_SECS   = 5.0
+SHAKE_AMP     = 10
+CHROMA_SHIFT  = 8
+CLIMAX_WAVE_MULT = 2.0
 
 # ── Ken Burns ────────────────────────────────────────────────────
 KB_START = 1.0
 KB_END   = 1.10
+
 
 # ══════════════════════════════════════════════════════════════════
 #  FONT
@@ -117,11 +150,12 @@ KB_END   = 1.10
 def ensure_font():
     if FONT_PATH.exists():
         return
+    print("[FONT] Downloading Montserrat Bold...")
     try:
         r = requests.get(FONT_URL, timeout=30)
         if r.status_code == 200:
             FONT_PATH.write_bytes(r.content)
-            print(f"[FONT] ✅ Downloaded")
+            print("[FONT] ✅ Downloaded")
             return
     except Exception as e:
         print(f"[FONT] Download failed: {e}")
@@ -130,6 +164,7 @@ def ensure_font():
     chosen = bold[0] if bold else (ttfs[0] if ttfs else None)
     if chosen:
         shutil.copy(chosen, str(FONT_PATH))
+        print(f"[FONT] System fallback: {chosen}")
 
 
 def get_font(size: int):
@@ -158,8 +193,9 @@ def download_audio():
         headers=headers)
     artifacts = res.json().get("artifacts", [])
     if not artifacts:
-        sys.exit("[ERROR] No artifacts")
+        sys.exit("[ERROR] No artifacts found")
     latest = artifacts[0]
+    print(f"[AUDIO] Downloading {latest['name']}...")
     r = requests.get(latest["archive_download_url"], headers=headers)
     with open("audio.zip", "wb") as f:
         f.write(r.content)
@@ -209,7 +245,7 @@ async def generate_tts_with_timing(text: str) -> list:
                     "duration": chunk["duration"] / 10_000_000,
                 })
     AUDIO_MP3.write_bytes(bytes(audio_data))
-    print(f"[TTS] {len(words)} timestamps")
+    print(f"[TTS] {len(words)} word timestamps")
     return words
 
 
@@ -218,18 +254,19 @@ async def generate_tts_with_timing(text: str) -> list:
 # ══════════════════════════════════════════════════════════════════
 
 def analyse_audio(path: str, n_frames: int) -> tuple:
+    print("[AUDIO] Analysing...")
     y, sr    = librosa.load(str(path), sr=None, mono=True)
     duration = len(y) / sr
     spf      = len(y) / n_frames
     rms_arr  = np.zeros(n_frames, dtype=np.float32)
-    wave_arr = np.zeros((n_frames, 200), dtype=np.float32)
+    wave_arr = np.zeros((n_frames, WAVE_POINTS), dtype=np.float32)
     for i in range(n_frames):
         s = int(i * spf); e = min(int(s+spf), len(y))
         chunk = y[s:e]
         if not len(chunk): continue
         rms_arr[i] = float(np.sqrt(np.mean(chunk**2)))
-        if len(chunk) >= 200:
-            idx = np.linspace(0, len(chunk)-1, 200).astype(int)
+        if len(chunk) >= WAVE_POINTS:
+            idx = np.linspace(0, len(chunk)-1, WAVE_POINTS).astype(int)
             wave_arr[i] = chunk[idx]
         else:
             wave_arr[i, :len(chunk)] = chunk
@@ -243,72 +280,87 @@ def analyse_audio(path: str, n_frames: int) -> tuple:
 #  PHRASE GROUPING
 # ══════════════════════════════════════════════════════════════════
 
-def group_into_phrases(word_timestamps: list, duration: float) -> list:
+def group_into_phrases(word_timestamps: list,
+                       duration: float,
+                       accent_bgr: tuple) -> list:
     phrases      = []
     climax_start = duration - CLIMAX_SECS
     entrances    = ["fly_left", "fly_right", "fly_top",
-                    "fly_left", "fly_right"]  # weighted toward horizontal
+                    "fly_left", "fly_right"]
+
+    # Pre-assign accent to 35% of phrase indices
+    n_total       = max(1, len(word_timestamps) // WORDS_PER_PHRASE)
+    accent_set    = set(random.sample(
+        range(n_total), max(1, int(n_total * ACCENT_WORD_CHANCE))
+    ))
 
     i = 0
+    pi = 0
     while i < len(word_timestamps):
         group = word_timestamps[i:i + WORDS_PER_PHRASE]
         text  = ' '.join(w["word"] for w in group)
         clean = re.sub(r'[^a-zA-Z0-9\'\-!?.,"\s]', '', text).strip()
         if not clean:
             i += WORDS_PER_PHRASE
+            pi += 1
             continue
 
-        start_sec  = group[0]["start"]
-        end_sec    = group[-1]["start"] + group[-1]["duration"]
+        start_sec = group[0]["start"]
+        end_sec   = group[-1]["start"] + group[-1]["duration"]
         if end_sec - start_sec < MIN_PHRASE_HOLD_SEC:
             end_sec = start_sec + MIN_PHRASE_HOLD_SEC
 
         has_caps   = bool(re.search(r'[A-Z]{2,}', text))
-        has_quotes = '"' in text or "'" in text
+        has_quotes = '"' in text
         is_climax  = start_sec >= climax_start
+        use_accent = has_caps or has_quotes or (pi in accent_set)
 
-        # Entrance type
-        if random.random() < VERTICAL_CHANCE:
-            entrance = "vertical"
-        else:
-            entrance = random.choice(entrances)
+        entrance = "vertical" if random.random() < VERTICAL_CHANCE \
+                   else random.choice(entrances)
 
-        # Dynamic position — within center 60% of screen
+        # Safe random position — anchor point for centering
         rand_x = random.randint(POS_X_MIN, POS_X_MAX)
         rand_y = random.randint(POS_Y_MIN, POS_Y_MAX)
 
+        # Pick word color for this phrase
+        if use_accent:
+            phrase_color = accent_bgr
+        else:
+            phrase_color = random.choice(WORD_COLORS_BGR)
+
         phrases.append({
-            "text":       clean,
-            "start_sec":  start_sec,
-            "end_sec":    end_sec,
-            "has_caps":   has_caps,
-            "has_quotes": has_quotes,
-            "is_climax":  is_climax,
-            "entrance":   entrance,
-            "rand_x":     rand_x,
-            "rand_y":     rand_y,
+            "text":         clean,
+            "start_sec":    start_sec,
+            "end_sec":      end_sec,
+            "has_caps":     has_caps,
+            "has_quotes":   has_quotes,
+            "is_climax":    is_climax,
+            "entrance":     entrance,
+            "rand_x":       rand_x,
+            "rand_y":       rand_y,
+            "phrase_color": phrase_color,
+            "use_accent":   use_accent,
         })
-        i += WORDS_PER_PHRASE
+        i  += WORDS_PER_PHRASE
+        pi += 1
 
     if phrases:
         phrases[-1]["is_climax"] = True
 
-    print(f"[PHRASE] {len(phrases)} phrases")
+    print(f"[PHRASE] {len(phrases)} phrases | "
+          f"{sum(1 for p in phrases if p['use_accent'])} accented")
     return phrases
 
 
 # ══════════════════════════════════════════════════════════════════
-#  EASING — Elastic Overshoot 0.5→1.15→1.0
+#  EASING
 # ══════════════════════════════════════════════════════════════════
 
 def elastic_overshoot(t: float) -> float:
-    """Scale: 0.5 at t=0, peaks ~1.15, settles 1.0."""
     if t <= 0: return 0.0
     if t >= 1: return 1.0
-    # Elastic out with overshoot
-    raw = 1 + (2**(-10*t)) * math.sin((t - 0.075) * 2*math.pi / 0.3)
-    # Remap so start = ELASTIC_START_SCALE
-    return ELASTIC_START_SCALE + raw * (1.0 - ELASTIC_START_SCALE)
+    raw = 1 + (2**(-10*t)) * math.sin((t-0.075)*2*math.pi/0.3)
+    return ELASTIC_START + raw * (1.0 - ELASTIC_START)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -317,53 +369,49 @@ def elastic_overshoot(t: float) -> float:
 
 def apply_motion_blur(img: Image.Image,
                       entrance: str, t: float) -> Image.Image:
-    """Apply directional motion blur during entrance."""
     if t > 0.5 or entrance == "vertical":
         return img
     blur_px = int(MOTION_BLUR_PX * (1 - t * 2))
     if blur_px < 2:
         return img
-
     arr = np.array(img, dtype=np.float32)
     if entrance in ("fly_left", "fly_right"):
-        kernel = np.zeros((1, blur_px), dtype=np.float32)
-        kernel[0, :] = 1.0 / blur_px
-    else:  # fly_top
-        kernel = np.zeros((blur_px, 1), dtype=np.float32)
-        kernel[:, 0] = 1.0 / blur_px
-
+        kernel = np.ones((1, blur_px), dtype=np.float32) / blur_px
+    else:
+        kernel = np.ones((blur_px, 1), dtype=np.float32) / blur_px
     blurred = np.zeros_like(arr)
     for c in range(arr.shape[2]):
         blurred[:,:,c] = cv2.filter2D(arr[:,:,c], -1, kernel)
-
     return Image.fromarray(blurred.astype(np.uint8))
 
 
 # ══════════════════════════════════════════════════════════════════
-#  NEON GLOW TEXT RENDERER
+#  PHRASE IMAGE RENDERER
 # ══════════════════════════════════════════════════════════════════
 
 def render_phrase_image(text: str,
                         has_caps: bool,
                         has_quotes: bool,
-                        word_bgr: tuple,
+                        phrase_color: tuple,
+                        accent_bgr: tuple,
+                        use_accent: bool,
                         is_climax: bool = False) -> Image.Image:
     words       = text.split()
-    NORMAL_SIZE = 95
-    CAPS_SIZE   = 122
-    LINE_SP     = 22
-    PAD         = 32
-
-    use_accent  = has_caps or has_quotes
+    NORMAL_SIZE = 98
+    CAPS_SIZE   = 124
+    LINE_SP     = 24
+    PAD         = 36
 
     word_data = []
     for w in words:
         is_cap = bool(re.search(r'[A-Z]{2,}', w))
         is_qot = w.startswith('"') or w.startswith("'")
-        is_acc = is_cap or is_qot
-        size   = CAPS_SIZE if is_acc else NORMAL_SIZE
-        if is_climax: size = int(size * 1.06)
-        color  = CRIMSON_BGR if is_acc else word_bgr
+        is_acc = is_cap or is_qot or use_accent
+        size   = CAPS_SIZE if is_cap else NORMAL_SIZE
+        if is_climax:
+            size = int(size * 1.06)
+        # Each word gets phrase_color — accent words get accent
+        color  = accent_bgr if is_acc else phrase_color
         font   = get_font(size)
         tmp    = Image.new("RGBA", (1,1))
         draw   = ImageDraw.Draw(tmp)
@@ -377,19 +425,20 @@ def render_phrase_image(text: str,
             "is_acc": is_acc,
         })
 
-    # Line wrapping
-    max_w  = W - 160
+    # Line wrapping — max width is canvas width minus safe margins
+    max_w  = W - 120
     lines, cur, cw = [], [], 0
     for wd in word_data:
         if cw + wd["w"] + 18 > max_w and cur:
             lines.append(cur); cur, cw = [wd], wd["w"]
         else:
             cur.append(wd); cw += wd["w"] + 18
-    if cur: lines.append(cur)
+    if cur:
+        lines.append(cur)
 
     lh_list = [max(wd["h"] for wd in l) for l in lines]
     tot_h   = sum(lh_list) + LINE_SP*(len(lines)-1) + PAD*2
-    tot_w   = W - 60
+    tot_w   = W - 80
 
     img  = Image.new("RGBA", (max(1, tot_w), max(1, tot_h)), (0,0,0,0))
     draw = ImageDraw.Draw(img)
@@ -404,30 +453,28 @@ def render_phrase_image(text: str,
             rgb = (wd["color"][2], wd["color"][1], wd["color"][0])
 
             if wd["is_acc"]:
-                # Multi-pass neon glow (Electric Crimson)
-                glow_rgb = (CRIMSON_GLOW_BGR[2],
-                            CRIMSON_GLOW_BGR[1],
-                            CRIMSON_GLOW_BGR[0])
-                for gd, ga in [(8, 60), (5, 100), (3, 140)]:
-                    draw.text((x+gd,  y),    wd["text"], font=wd["font"],
-                              fill=glow_rgb+(ga,))
-                    draw.text((x-gd,  y),    wd["text"], font=wd["font"],
-                              fill=glow_rgb+(ga,))
-                    draw.text((x,     y+gd), wd["text"], font=wd["font"],
-                              fill=glow_rgb+(ga,))
-                    draw.text((x,     y-gd), wd["text"], font=wd["font"],
-                              fill=glow_rgb+(ga,))
+                # Neon glow passes for accented words
+                glow_rgb = tuple(min(255, int(c*1.3)) for c in rgb)
+                for gd, ga in [(7, 50), (4, 90), (2, 130)]:
+                    draw.text((x+gd, y),   wd["text"],
+                              font=wd["font"], fill=glow_rgb+(ga,))
+                    draw.text((x-gd, y),   wd["text"],
+                              font=wd["font"], fill=glow_rgb+(ga,))
+                    draw.text((x, y+gd),   wd["text"],
+                              font=wd["font"], fill=glow_rgb+(ga,))
+                    draw.text((x, y-gd),   wd["text"],
+                              font=wd["font"], fill=glow_rgb+(ga,))
                 # Underline
-                ul_y = y + wd["h"] + 5
+                ul_y = y + wd["h"] + 4
                 draw.line([(x, ul_y), (x+wd["w"], ul_y)],
-                          fill=rgb+(220,), width=3)
+                          fill=rgb+(210,), width=3)
             else:
-                # Soft shadow
-                draw.text((x+3, y+3), wd["text"], font=wd["font"],
-                          fill=(0,0,0,130))
+                # Light shadow on light background — use dark tone
+                draw.text((x+2, y+2), wd["text"], font=wd["font"],
+                          fill=(20,20,20,100))
 
-            draw.text((x, y), wd["text"], font=wd["font"],
-                      fill=rgb+(255,))
+            draw.text((x, y), wd["text"],
+                      font=wd["font"], fill=rgb+(255,))
             x += wd["w"] + 18
 
         y += lh + LINE_SP
@@ -436,65 +483,42 @@ def render_phrase_image(text: str,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  GRADIENT WAVEFORM
+#  GRADIENT WAVEFORM (dark on light background)
 # ══════════════════════════════════════════════════════════════════
 
 def draw_gradient_waveform(canvas: np.ndarray,
                            wave: np.ndarray,
                            rms: float,
+                           wave_bgr: tuple,
+                           accent_bgr: tuple,
                            is_climax: bool) -> None:
-    """
-    Gradient waveform: brightest at center, tapers to edges.
-    In climax: transitions to Crimson and doubles amplitude.
-    """
-    NPTS      = 200
     amp_mult  = CLIMAX_WAVE_MULT if is_climax else 1.0
-    base_ht   = int(H * 0.14)
+    base_ht   = WAVE_HEIGHT
     amp       = base_ht * (0.15 + rms * 0.85) * amp_mult
     amp       = min(amp, base_ht * 1.8)
 
-    xs        = np.linspace(80, W-80, NPTS).astype(int)
-    kern      = np.ones(9) / 9
-    ws        = np.convolve(wave, kern, mode='same')
-    ys        = np.clip((WAVE_Y_BASE - ws * amp).astype(int), 10, H-10)
+    xs   = np.linspace(80, W-80, WAVE_POINTS).astype(int)
+    kern = np.ones(9) / 9
+    ws   = np.convolve(wave, kern, mode='same')
+    ys   = np.clip((WAVE_Y_BASE - ws * amp).astype(int), 10, H-10)
 
-    # Color transition: lime → crimson in climax
-    if is_climax:
-        base_col = CRIMSON_BGR
-        glow_col = CRIMSON_GLOW_BGR
-    else:
-        base_col = WAVE_BASE_BGR
-        glow_col = tuple(max(0, int(c*0.35)) for c in WAVE_BASE_BGR)
+    col      = accent_bgr if is_climax else wave_bgr
+    center_i = WAVE_POINTS // 2
 
-    # Gradient brightness: center segment = full brightness
-    center_idx = NPTS // 2
-    for i in range(NPTS - 1):
-        dist_from_center = abs(i - center_idx) / center_idx
-        brightness       = 1.0 - dist_from_center * 0.75
-        brightness       = max(0.25, brightness)
+    for i in range(WAVE_POINTS - 1):
+        dist       = abs(i - center_i) / center_i
+        brightness = max(0.25, 1.0 - dist * 0.70)
+        c          = tuple(int(v * brightness) for v in col)
+        glow_c     = tuple(max(0, int(v * brightness * 0.5)) for v in col)
+        pt1        = (int(xs[i]),   int(ys[i]))
+        pt2        = (int(xs[i+1]), int(ys[i+1]))
+        cv2.line(canvas, pt1, pt2, glow_c, 10, cv2.LINE_AA)
+        cv2.line(canvas, pt1, pt2, c,       3, cv2.LINE_AA)
 
-        col = tuple(int(c * brightness) for c in base_col)
-        pt1 = (int(xs[i]),   int(ys[i]))
-        pt2 = (int(xs[i+1]), int(ys[i+1]))
-
-        # Glow pass
-        gcol = tuple(int(c * brightness * 0.4) for c in base_col)
-        cv2.line(canvas, pt1, pt2, gcol, 12, cv2.LINE_AA)
-        cv2.line(canvas, pt1, pt2, gcol, 7,  cv2.LINE_AA)
-        # Bright core
-        cv2.line(canvas, pt1, pt2, col,  2,  cv2.LINE_AA)
-
-    # Peak sparkle
     pi  = int(np.argmax(np.abs(ws)))
     px, py = int(xs[pi]), int(ys[pi])
-    cv2.circle(canvas, (px, py), 6,  (255,255,255), -1)
-    cv2.circle(canvas, (px, py), 11, base_col, 2)
-
-    # Waveform Y baseline
-    WAVE_Y_BASE_local = int(H * 0.82)
-
-
-WAVE_Y_BASE = int(H * 0.82)
+    cv2.circle(canvas, (px, py), 5, col, -1)
+    cv2.circle(canvas, (px, py), 9, col,  2)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -502,7 +526,6 @@ WAVE_Y_BASE = int(H * 0.82)
 # ══════════════════════════════════════════════════════════════════
 
 def apply_film_grain(canvas: np.ndarray, frame_idx: int) -> np.ndarray:
-    """Add high-frequency noise that changes every frame."""
     rng   = np.random.RandomState(frame_idx * 31 + 7)
     noise = rng.randint(-GRAIN_INTENSITY, GRAIN_INTENSITY+1,
                         canvas.shape, dtype=np.int16)
@@ -519,45 +542,34 @@ def build_vignette() -> np.ndarray:
     ys = np.linspace(-1, 1, H)
     X, Y  = np.meshgrid(xs, ys)
     dist  = np.sqrt(X**2 + Y**2)
-    mask  = 1.0 - np.clip(dist / dist.max() * VIGNETTE_STRENGTH, 0, 1)
+    mask  = 1.0 - np.clip(dist / dist.max() * VIGNETTE_STR, 0, 1)
     return mask.reshape(H, W, 1).astype(np.float32)
 
 
 # ══════════════════════════════════════════════════════════════════
-#  CHROMATIC ABERRATION SHAKE
+#  CHROMATIC ABERRATION + SHAKE
 # ══════════════════════════════════════════════════════════════════
 
 def apply_chromatic_aberration(canvas: np.ndarray,
                                frame_idx: int) -> np.ndarray:
-    """
-    Split R and B channels, shift them by different random amounts.
-    Creates a glitchy RGB split effect.
-    """
     rng  = np.random.RandomState(frame_idx * 13 + 5)
     sr_x = int(rng.randint(-CHROMA_SHIFT, CHROMA_SHIFT+1))
     sr_y = int(rng.randint(-CHROMA_SHIFT//2, CHROMA_SHIFT//2+1))
-    sb_x = -sr_x + int(rng.randint(-3, 4))
-    sb_y = -sr_y + int(rng.randint(-2, 3))
-
+    sb_x, sb_y = -sr_x + int(rng.randint(-3,4)), -sr_y + int(rng.randint(-2,3))
     b, g, r = cv2.split(canvas)
-
-    Mr = np.float32([[1, 0, sr_x], [0, 1, sr_y]])
-    Mb = np.float32([[1, 0, sb_x], [0, 1, sb_y]])
-
-    r_shifted = cv2.warpAffine(r, Mr, (W, H),
-                                borderMode=cv2.BORDER_REPLICATE)
-    b_shifted = cv2.warpAffine(b, Mb, (W, H),
-                                borderMode=cv2.BORDER_REPLICATE)
-
-    return cv2.merge([b_shifted, g, r_shifted])
+    Mr = np.float32([[1,0,sr_x],[0,1,sr_y]])
+    Mb = np.float32([[1,0,sb_x],[0,1,sb_y]])
+    r  = cv2.warpAffine(r, Mr, (W,H), borderMode=cv2.BORDER_REPLICATE)
+    b  = cv2.warpAffine(b, Mb, (W,H), borderMode=cv2.BORDER_REPLICATE)
+    return cv2.merge([b, g, r])
 
 
 def apply_shake(canvas: np.ndarray, frame_idx: int) -> np.ndarray:
     rng = np.random.RandomState(frame_idx * 7 + 13)
     sx  = int(rng.randint(-SHAKE_AMP, SHAKE_AMP+1))
     sy  = int(rng.randint(-SHAKE_AMP//2, SHAKE_AMP//2+1))
-    M   = np.float32([[1, 0, sx], [0, 1, sy]])
-    return cv2.warpAffine(canvas, M, (W, H),
+    M   = np.float32([[1,0,sx],[0,1,sy]])
+    return cv2.warpAffine(canvas, M, (W,H),
                           borderMode=cv2.BORDER_REPLICATE)
 
 
@@ -571,14 +583,14 @@ def apply_ken_burns(frame: np.ndarray,
     scale = KB_START + t * (KB_END - KB_START)
     if abs(scale-1.0) < 0.002:
         return frame
-    nw  = int(W * scale); nh = int(H * scale)
+    nw  = int(W*scale); nh = int(H*scale)
     big = cv2.resize(frame, (nw, nh))
     ox  = (nw-W)//2; oy = (nh-H)//2
     return big[oy:oy+H, ox:ox+W]
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE PHRASE
+#  COMPOSITE PHRASE — fully clamped to screen
 # ══════════════════════════════════════════════════════════════════
 
 def composite_phrase(canvas_bgr: np.ndarray,
@@ -592,12 +604,10 @@ def composite_phrase(canvas_bgr: np.ndarray,
     iw, ih = phrase_img.size
 
     if frame_in < ANIM_IN_FRAMES:
-        t      = frame_in / ANIM_IN_FRAMES
-        e      = elastic_overshoot(t)
-        scale  = e
-        alpha  = min(1.0, t * 3.0)
-
-        # Position offset during entrance
+        t     = frame_in / ANIM_IN_FRAMES
+        e     = elastic_overshoot(t)
+        scale = e
+        alpha = min(1.0, t * 3.0)
         if entrance == "fly_left":
             x_off = int((1-t) * (-iw - 80))
             y_off = 0
@@ -609,11 +619,8 @@ def composite_phrase(canvas_bgr: np.ndarray,
             y_off = int((1-t) * (-ih - 80))
         else:
             x_off = y_off = 0
-
-        # Apply motion blur during entrance
         if entrance in ("fly_left", "fly_right", "fly_top"):
             phrase_img = apply_motion_blur(phrase_img, entrance, t)
-
     elif frame_out < ANIM_OUT_FRAMES:
         scale = 1.0
         alpha = frame_out / ANIM_OUT_FRAMES
@@ -626,20 +633,20 @@ def composite_phrase(canvas_bgr: np.ndarray,
     if alpha_override is not None:
         alpha = alpha_override
 
-    # Apply scale
     disp = phrase_img
     if abs(scale - 1.0) > 0.01:
         nw   = max(1, int(iw * scale))
         nh   = max(1, int(ih * scale))
         disp = phrase_img.resize((nw, nh), Image.LANCZOS)
 
-    # Dynamic position
+    # Anchor to center of phrase
     px = pos_x - disp.width  // 2 + x_off
     py = pos_y - disp.height // 2 + y_off
-    px = max(-disp.width,  min(W, px))
-    py = max(-disp.height, min(H, py))
 
-    # Convert and composite
+    # HARD CLAMP — never go off any edge
+    px = max(SAFE_PAD, min(W - disp.width  - SAFE_PAD, px))
+    py = max(SAFE_PAD, min(H - disp.height - SAFE_PAD, py))
+
     canvas_rgb = cv2.cvtColor(canvas_bgr, cv2.COLOR_BGR2RGB)
     canvas_pil = Image.fromarray(canvas_rgb).convert("RGBA")
 
@@ -659,10 +666,11 @@ def composite_phrase(canvas_bgr: np.ndarray,
 # ══════════════════════════════════════════════════════════════════
 
 def apply_caps_flash(canvas: np.ndarray,
-                     intensity: float) -> np.ndarray:
-    overlay = np.full_like(canvas, (60, 30, 180), dtype=np.uint8)
-    return cv2.addWeighted(canvas, 1-intensity*0.20,
-                           overlay, intensity*0.20, 0)
+                     intensity: float,
+                     accent_bgr: tuple) -> np.ndarray:
+    overlay = np.full_like(canvas, accent_bgr, dtype=np.uint8)
+    return cv2.addWeighted(canvas, 1-intensity*0.15,
+                           overlay, intensity*0.15, 0)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -674,7 +682,8 @@ def render_video(phrases: list,
                  wave_arr: np.ndarray,
                  duration: float,
                  bg_bgr: tuple,
-                 word_bgr: tuple) -> None:
+                 accent_bgr: tuple,
+                 wave_bgr: tuple) -> None:
 
     n_frames     = len(rms_arr)
     vignette     = build_vignette()
@@ -687,12 +696,15 @@ def render_video(phrases: list,
         sys.exit("[ERROR] VideoWriter failed")
 
     print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases")
+    print(f"[RENDER] BG={bg_bgr} | Accent={accent_bgr}")
 
     # Pre-render phrase images
+    print("[RENDER] Pre-rendering phrases...")
     for p in phrases:
         p["img"] = render_phrase_image(
             p["text"], p["has_caps"], p["has_quotes"],
-            word_bgr, p["is_climax"]
+            p["phrase_color"], accent_bgr,
+            p["use_accent"], p["is_climax"]
         )
         p["sf"] = int(p["start_sec"] * FPS)
         p["ef"] = min(int(p["end_sec"] * FPS), n_frames)
@@ -703,22 +715,23 @@ def render_video(phrases: list,
         for f in range(p["sf"], p["ef"]):
             frame_phrase[f] = p
 
-    caps_flash   = 0
-    prev_phrase  = None
-    log_step     = max(1, n_frames // 20)
+    caps_flash  = 0
+    prev_phrase = None
+    log_step    = max(1, n_frames // 20)
 
     for i in range(n_frames):
         is_climax = i >= climax_start
 
-        # ── Background ───────────────────────────────────────────
+        # Background
         canvas = np.full((H, W, 3), bg_bgr, dtype=np.uint8)
 
-        # ── Gradient Waveform ────────────────────────────────────
-        draw_gradient_waveform(canvas, wave_arr[i],
-                               rms_arr[i], is_climax)
+        # Waveform
+        draw_gradient_waveform(canvas, wave_arr[i], rms_arr[i],
+                               wave_bgr, accent_bgr, is_climax)
 
-        # ── Stagger: previous phrase lingers ─────────────────────
         cur = frame_phrase.get(i)
+
+        # Stagger linger
         if (prev_phrase is not None and cur is not None
                 and cur["pi"] != prev_phrase["pi"]):
             since_end = i - prev_phrase["ef"]
@@ -732,7 +745,7 @@ def render_video(phrases: list,
                     alpha_override=la
                 )
 
-        # ── Active phrase ─────────────────────────────────────────
+        # Active phrase
         if cur is not None:
             fi = i - cur["sf"]
             fo = cur["ef"] - i
@@ -745,35 +758,33 @@ def render_video(phrases: list,
                              cur["rand_x"], cur["rand_y"])
             prev_phrase = cur
 
-        # ── CAPS flash ────────────────────────────────────────────
+        # CAPS flash
         if caps_flash > 0:
-            canvas = apply_caps_flash(canvas, caps_flash/2)
+            canvas = apply_caps_flash(canvas, caps_flash/2, accent_bgr)
             caps_flash -= 1
 
-        # ── Vignette ─────────────────────────────────────────────
+        # Vignette
         cf     = canvas.astype(np.float32)/255.0 * vignette
         canvas = (cf*255).clip(0,255).astype(np.uint8)
 
-        # ── Ken Burns ────────────────────────────────────────────
+        # Ken Burns
         canvas = apply_ken_burns(canvas, i, n_frames)
 
-        # ── Film Grain ───────────────────────────────────────────
+        # Film grain
         canvas = apply_film_grain(canvas, i)
 
-        # ── Climax: chromatic aberration + shake ─────────────────
+        # Climax effects
         if is_climax:
             canvas = apply_chromatic_aberration(canvas, i)
             canvas = apply_shake(canvas, i)
 
         writer.write(canvas)
         if i % log_step == 0:
-            pct = int(i/n_frames*100)
-            tag = "🔥" if is_climax else ""
-            print(f"  [RENDER] {pct}% {tag}")
+            print(f"  [RENDER] {int(i/n_frames*100)}%"
+                  f"{'  🔥 CLIMAX' if is_climax else ''}")
 
     writer.release()
     print("[RENDER] Re-encoding...")
-
     cmd = ["ffmpeg", "-y", "-i", temp,
            "-c:v", "libx264", "-preset", "fast",
            "-crf", "17", "-pix_fmt", "yuv420p", "-an",
@@ -783,7 +794,6 @@ def render_video(phrases: list,
         shutil.copy(temp, str(OUTPUT_VIDEO))
     else:
         Path(temp).unlink(missing_ok=True)
-
     mb = OUTPUT_VIDEO.stat().st_size / (1024*1024)
     print(f"[✓] {OUTPUT_VIDEO} ({mb:.1f}MB)")
 
@@ -794,8 +804,8 @@ def render_video(phrases: list,
 
 def main():
     print("=" * 62)
-    print("  Cinematic Kinetic Engine v4")
-    print("  Grain · Chroma · Gradient Wave · Elastic · Glow")
+    print("  Cinematic Kinetic Engine v5")
+    print("  Warm Fruit Tones · Dark Words · Fully Bounded")
     print("=" * 62)
 
     ensure_font()
@@ -809,8 +819,9 @@ def main():
     clean = clean_script(raw)
     print(f"[INFO] Script: {len(clean.split())} words")
 
-    bg_bgr   = random.choice(BACKGROUNDS_BGR)
-    word_bgr = random.choice(WORD_COLORS_BGR)
+    bg_bgr     = random.choice(BACKGROUNDS_BGR)
+    accent_bgr = random.choice(ACCENT_COLORS_BGR)
+    wave_bgr   = random.choice(WAVE_COLORS_BGR)
 
     cmd = ["ffprobe", "-v", "error",
            "-show_entries", "format=duration",
@@ -819,7 +830,7 @@ def main():
     duration = float(subprocess.run(
         cmd, capture_output=True, text=True).stdout.strip())
     n_frames = int(duration * FPS)
-    print(f"[INFO] Duration: {duration:.2f}s | Frames: {n_frames}")
+    print(f"[INFO] Duration: {duration:.2f}s | BG: {bg_bgr}")
 
     print("[TTS] Computing word timestamps...")
     word_timestamps = asyncio.run(generate_tts_with_timing(clean))
@@ -832,11 +843,11 @@ def main():
             for i, w in enumerate(words)
         ]
 
-    phrases  = group_into_phrases(word_timestamps, duration)
+    phrases  = group_into_phrases(word_timestamps, duration, accent_bgr)
     rms_arr, wave_arr, _ = analyse_audio(str(INPUT_AUDIO), n_frames)
 
     render_video(phrases, rms_arr, wave_arr, duration,
-                 bg_bgr, word_bgr)
+                 bg_bgr, accent_bgr, wave_bgr)
 
     print("\n" + "=" * 62)
     print("  [✓] DONE — raw_video.mp4 ready")
