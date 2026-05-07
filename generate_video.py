@@ -30,10 +30,6 @@ except ImportError:
     sys.exit("[ERROR] edge-tts not installed")
 
 
-# ══════════════════════════════════════════════════════════════════
-# CONFIG
-# ══════════════════════════════════════════════════════════════════
-
 W, H = 1080, 1920
 FPS = 30
 
@@ -97,28 +93,28 @@ KB_START = 1.0
 KB_END = 1.12
 
 FRUIT_PALETTES = [
-    ((185, 175, 255), (140, 120, 200)),  # Peach
-    ((180, 180, 255), (130, 125, 205)),  # Pink
-    ((130, 210, 150), (80, 155, 90)),    # Lime
-    ((140, 200, 255), (90, 140, 210)),   # Orange
-    ((193, 182, 255), (150, 130, 210)),  # Apricot
-    ((170, 140, 255), (120, 90, 200)),   # Salmon
-    ((160, 130, 255), (110, 80, 195)),   # Coral
-    ((200, 170, 255), (150, 115, 205)),  # Melon
-    ((180, 160, 250), (130, 105, 190)),  # Papaya
-    ((210, 190, 255), (165, 135, 215)),  # Shell Pink
-    ((175, 120, 240), (125, 70, 180)),   # Terra Cotta
-    ((200, 182, 255), (155, 130, 215)),  # Creamsicle
-    ((190, 150, 240), (140, 100, 185)),  # Guava
-    ((170, 160, 255), (120, 105, 195)),  # Nectarine
+    ((185, 175, 255), (140, 120, 200)),
+    ((180, 180, 255), (130, 125, 205)),
+    ((130, 210, 150), (80, 155, 90)),
+    ((140, 200, 255), (90, 140, 210)),
+    ((193, 182, 255), (150, 130, 210)),
+    ((170, 140, 255), (120, 90, 200)),
+    ((160, 130, 255), (110, 80, 195)),
+    ((200, 170, 255), (150, 115, 205)),
+    ((180, 160, 250), (130, 105, 190)),
+    ((210, 190, 255), (165, 135, 215)),
+    ((175, 120, 240), (125, 70, 180)),
+    ((200, 182, 255), (155, 130, 215)),
+    ((190, 150, 240), (140, 100, 185)),
+    ((170, 160, 255), (120, 105, 195)),
 ]
 
 CLIMAX_PAIRS = [
-    (5, 6),   # Salmon -> Coral
-    (0, 4),   # Peach -> Apricot
-    (7, 8),   # Melon -> Papaya
-    (9, 10),  # Shell Pink -> Terra Cotta
-    (11, 12), # Creamsicle -> Guava
+    (5, 6),
+    (0, 4),
+    (7, 8),
+    (9, 10),
+    (11, 12),
 ]
 
 WORD_COLORS_BGR = [
@@ -175,10 +171,6 @@ KEYWORD_MAP = {
 }
 
 
-# ══════════════════════════════════════════════════════════════════
-# FONT
-# ══════════════════════════════════════════════════════════════════
-
 def ensure_font():
     if FONT_PATH.exists():
         return
@@ -186,7 +178,7 @@ def ensure_font():
         r = requests.get(FONT_URL, timeout=30)
         if r.status_code == 200:
             FONT_PATH.write_bytes(r.content)
-            print("[FONT] ✅ Downloaded")
+            print("[FONT] Downloaded")
             return
     except Exception as e:
         print(f"[FONT] {e}")
@@ -206,10 +198,6 @@ def get_font(size: int):
         pass
     return ImageFont.load_default()
 
-
-# ══════════════════════════════════════════════════════════════════
-# AUDIO DOWNLOAD
-# ══════════════════════════════════════════════════════════════════
 
 def download_audio():
     token = os.environ.get("GH_TOKEN", "")
@@ -243,14 +231,10 @@ def download_audio():
     wavs = glob.glob("audio_extracted/**/*.wav", recursive=True) or glob.glob("audio_extracted/*.wav")
     if wavs:
         shutil.copy(wavs[0], str(INPUT_AUDIO))
-        print(f"[AUDIO] ✅ {INPUT_AUDIO.stat().st_size // 1024}KB")
+        print(f"[AUDIO] {INPUT_AUDIO.stat().st_size // 1024}KB")
     else:
         sys.exit("[ERROR] No WAV found in artifact")
 
-
-# ══════════════════════════════════════════════════════════════════
-# SCRIPT CLEANING
-# ══════════════════════════════════════════════════════════════════
 
 def clean_script(raw: str) -> str:
     text = re.sub(r'[.*?]', '', raw, flags=re.DOTALL)
@@ -262,10 +246,6 @@ def clean_script(raw: str) -> str:
     text = re.sub(r's+', ' ', text)
     return text.strip()
 
-
-# ══════════════════════════════════════════════════════════════════
-# GIF STICKER ENGINE
-# ══════════════════════════════════════════════════════════════════
 
 def preload_gif(gif_path: str) -> list:
     if gif_path in GIF_CACHE:
@@ -283,10 +263,8 @@ def preload_gif(gif_path: str) -> list:
     try:
         while True:
             frame = gif.convert("RGBA").resize((target, target), Image.LANCZOS)
-
             bordered = Image.new("RGBA", (STICKER_SIZE, STICKER_SIZE), (255, 255, 255, 255))
             bordered.paste(frame, (STICKER_BORDER, STICKER_BORDER), frame)
-
             frames.append(np.array(bordered))
             gif.seek(gif.tell() + 1)
     except EOFError:
@@ -395,10 +373,6 @@ def render_sticker(canvas_bgr: np.ndarray, sticker: dict, frame_idx: int, start_
     np.copyto(canvas_bgr, result)
 
 
-# ══════════════════════════════════════════════════════════════════
-# BACKGROUND
-# ══════════════════════════════════════════════════════════════════
-
 def build_radial_gradient(center_bgr: tuple, edge_bgr: tuple) -> np.ndarray:
     xs = np.linspace(-1, 1, W)
     ys = np.linspace(-1, 1, H)
@@ -412,10 +386,6 @@ def build_radial_gradient(center_bgr: tuple, edge_bgr: tuple) -> np.ndarray:
     grad = (c * (1 - dist) + e * dist).clip(0, 255).astype(np.uint8)
     return grad
 
-
-# ══════════════════════════════════════════════════════════════════
-# TTS WITH TIMINGS
-# ══════════════════════════════════════════════════════════════════
 
 async def generate_tts_with_timing(text: str) -> list:
     communicate = edge_tts.Communicate(
@@ -444,10 +414,6 @@ async def generate_tts_with_timing(text: str) -> list:
     print(f"[TTS] {len(words)} timestamps")
     return words
 
-
-# ══════════════════════════════════════════════════════════════════
-# AUDIO ANALYSIS
-# ══════════════════════════════════════════════════════════════════
 
 def analyse_audio(path: str, n_frames: int) -> tuple:
     print("[AUDIO] Analysing...")
@@ -479,10 +445,6 @@ def analyse_audio(path: str, n_frames: int) -> tuple:
 
     return rms_arr, wave_arr, duration
 
-
-# ══════════════════════════════════════════════════════════════════
-# PHRASE GROUPING
-# ══════════════════════════════════════════════════════════════════
 
 def group_into_phrases(word_timestamps: list, duration: float, accent_bgr: tuple) -> list:
     phrases = []
@@ -544,10 +506,6 @@ def group_into_phrases(word_timestamps: list, duration: float, accent_bgr: tuple
     return phrases
 
 
-# ══════════════════════════════════════════════════════════════════
-# PHRASE IMAGE
-# ══════════════════════════════════════════════════════════════════
-
 def render_phrase_image(text: str, phrase_color: tuple, accent_bgr: tuple, use_accent: bool, is_climax: bool) -> Image.Image:
     words = text.split()
     N_SZ = 98
@@ -606,7 +564,6 @@ def render_phrase_image(text: str, phrase_color: tuple, accent_bgr: tuple, use_a
     for li, line in enumerate(lines):
         lw = sum(wd["w"] for wd in line) + 18 * (len(line) - 1)
         x = (tot_w - lw) // 2
-        lh = lh_list[li]
 
         for wd in line:
             rgb = (wd["color"][2], wd["color"][1], wd["color"][0])
@@ -627,14 +584,10 @@ def render_phrase_image(text: str, phrase_color: tuple, accent_bgr: tuple, use_a
             draw.text((x, y), wd["text"], font=wd["font"], fill=rgb + (255,))
             x += wd["w"] + 18
 
-        y += lh + LSP
+        y += max(wd["h"] for wd in line) + LSP
 
     return img
 
-
-# ══════════════════════════════════════════════════════════════════
-# MOTION BLUR
-# ══════════════════════════════════════════════════════════════════
 
 def apply_motion_blur(img: Image.Image, entrance: str, t: float) -> Image.Image:
     if t > 0.5:
@@ -657,10 +610,6 @@ def apply_motion_blur(img: Image.Image, entrance: str, t: float) -> Image.Image:
 
     return Image.fromarray(blurred.astype(np.uint8))
 
-
-# ══════════════════════════════════════════════════════════════════
-# TEXT COMPOSITING
-# ══════════════════════════════════════════════════════════════════
 
 def composite_phrase(canvas_bgr: np.ndarray,
                      phrase_img: Image.Image,
@@ -731,10 +680,6 @@ def composite_phrase(canvas_bgr: np.ndarray,
     np.copyto(canvas_bgr, result)
 
 
-# ══════════════════════════════════════════════════════════════════
-# WAVEFORM
-# ══════════════════════════════════════════════════════════════════
-
 def draw_gradient_waveform(canvas: np.ndarray,
                            wave: np.ndarray,
                            rms: float,
@@ -763,10 +708,6 @@ def draw_gradient_waveform(canvas: np.ndarray,
     cv2.circle(canvas, (int(xs[pi]), int(ys[pi])), 5, wave_bgr, -1)
     cv2.circle(canvas, (int(xs[pi]), int(ys[pi])), 9, wave_bgr, 2)
 
-
-# ══════════════════════════════════════════════════════════════════
-# EFFECTS
-# ══════════════════════════════════════════════════════════════════
 
 def apply_film_grain(canvas: np.ndarray, fi: int) -> np.ndarray:
     rng = np.random.RandomState(fi * 31 + 7)
@@ -826,10 +767,6 @@ def apply_caps_flash(canvas: np.ndarray, intensity: float, accent_bgr: tuple) ->
     ov = np.full_like(canvas, accent_bgr, dtype=np.uint8)
     return cv2.addWeighted(canvas, 1 - intensity * 0.15, ov, intensity * 0.15, 0)
 
-
-# ══════════════════════════════════════════════════════════════════
-# MAIN RENDER
-# ══════════════════════════════════════════════════════════════════
 
 def render_video(phrases: list,
                  rms_arr: np.ndarray,
@@ -936,11 +873,10 @@ def render_video(phrases: list,
         writer.write(canvas)
 
         if i % log_step == 0:
-            print(f"  [RENDER] {int(i / n_frames * 100)}%{'  🔥' if is_climax else ''}")
+            print(f"  [RENDER] {int(i / n_frames * 100)}%")
 
     writer.release()
 
-    print("[RENDER] Re-encoding...")
     cmd = [
         "ffmpeg", "-y",
         "-i", temp,
@@ -960,19 +896,10 @@ def render_video(phrases: list,
         Path(temp).unlink(missing_ok=True)
 
     mb = OUTPUT_VIDEO.stat().st_size / (1024 * 1024)
-    print(f"[✓] {OUTPUT_VIDEO} ({mb:.1f}MB)")
+    print(f"[DONE] {OUTPUT_VIDEO} ({mb:.1f}MB)")
 
-
-# ══════════════════════════════════════════════════════════════════
-# ENTRY POINT
-# ══════════════════════════════════════════════════════════════════
 
 def main():
-    print("=" * 62)
-    print("  Pop-Art Kinetic Engine v6")
-    print("  GIF Stickers · Radial Gradient · Elastic · Climax")
-    print("=" * 62)
-
     ensure_font()
 
     if not INPUT_AUDIO.exists():
@@ -987,15 +914,11 @@ def main():
     if not clean:
         sys.exit("[ERROR] script.txt is empty after cleaning")
 
-    print(f"[INFO] Script: {len(clean.split())} words")
-
     stickers = find_sticker_data(clean)
 
     palette_idx = random.randint(0, len(FRUIT_PALETTES) - 1)
     accent_bgr = random.choice(ACCENT_COLORS_BGR)
     wave_bgr = random.choice(WAVE_COLORS_BGR)
-
-    print(f"[INFO] Palette center: {FRUIT_PALETTES[palette_idx][0]}")
 
     cmd = [
         "ffprobe", "-v", "error",
@@ -1005,13 +928,10 @@ def main():
     ]
     out = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
     if not out:
-        sys.exit("[ERROR] Could not read audio duration with ffprobe")
+        sys.exit("[ERROR] Could not read audio duration")
 
     duration = float(out)
     n_frames = int(duration * FPS)
-
-    print(f"[INFO] Duration: {duration:.2f}s | Frames: {n_frames}")
-    print("[TTS] Computing word timestamps...")
 
     word_timestamps = asyncio.run(generate_tts_with_timing(clean))
 
@@ -1019,7 +939,6 @@ def main():
         words = clean.split()
         d = duration / max(1, len(words))
         word_timestamps = [{"word": w, "start": i * d, "duration": d} for i, w in enumerate(words)]
-        print("[TTS] Fallback word timing used")
 
     phrases = group_into_phrases(word_timestamps, duration, accent_bgr)
     rms_arr, wave_arr, _ = analyse_audio(str(INPUT_AUDIO), n_frames)
@@ -1034,11 +953,6 @@ def main():
         wave_bgr,
         stickers
     )
-
-    print("
-" + "=" * 62)
-    print("  [✓] DONE — raw_video.mp4 ready")
-    print("=" * 62)
 
 
 if __name__ == "__main__":
