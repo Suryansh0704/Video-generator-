@@ -98,9 +98,10 @@ jobs:
           echo "✅ Audio: ${DURATION}s"
           echo "$DURATION" > audio_duration.txt
 
-      - name: 🎨 Generate kinetic typography video
+      - name: 🎨 Generate video
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: python generate_video.py
 
       - name: ✂️ Trim to exact audio length
