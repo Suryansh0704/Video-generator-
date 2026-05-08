@@ -1144,4 +1144,161 @@ def caps_flash(canvas: np.ndarray,
 # ══════════════════════════════════════════════════════════════════
 #  MAIN RENDER — LAYER ORDER: BG → ASSETS → TEXT → EFFECTS
 # ══════════════════════════════════════════════════════════════════
+def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
+    n_frames     = len(rms_arr)
+    vignette     = build_vignette()
+    bg_base      = build_black_gradient()
+    particles    = init_particles()
+    climax_start = int((duration - CLIMAX_SECS) * FPS)
 
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    temp   = "raw_temp.mp4"
+    writer = cv2.VideoWriter(temp, fourcc, FPS, (W, H))
+    if not writer.isOpened():
+        sys.exit("[ERROR] VideoWriter failed to open")
+
+    print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases")
+    print(f"[RENDER] {len(scheduler.gifs)} GIFs | {len(scheduler.stickers)} stickers")
+
+    for p in phrases:
+        p["img"] = render_phrase_image(p["text"], p["use_accent"], LIME_GREEN)
+        p["sf"]  = int(p["start_sec"] * FPS)
+        p["ef"]  = min(int(p["end_sec"] * FPS), n_frames)
+
+    frame_phrase = {}
+    for pi, p in enumerate(phrases):
+        p["pi"] = pi
+        for f in range(p["sf"], p["ef"]):
+            frame_phrase[f] = p
+
+    flash_cnt   = 0
+    prev_phrase = None
+    log_step    = max(1, n_frames // 20)
+
+    for i in range(n_frames):
+        is_climax = i >= climax_start
+        canvas    = bg_base.copy()
+
+        # Dust particles
+        draw_particles(canvas, particles)
+
+        # GIFs behind text (edges)
+        for (sf, ef, frames, cx, cy, size) in scheduler.gifs:
+            composite_gif(canvas, frames, i, sf, ef, cx, cy, size)
+
+        # Stickers behind text (corners)
+        for (sf, ef, frames, sx, sy) in scheduler.stickers:
+            composite_sticker(canvas, frames, i, sf, ef, sx, sy)
+
+        # Waveform
+        draw_neon_waveform(canvas, wave_arr[i], rms_arr[i], is_climax)
+
+        cur = frame_phrase.get(i)
+
+        # Previous phrase persistence (20% + blur)
+        if (prev_phrase is not None and cur is not None
+                and cur["pi"] != prev_phrase["pi"]):
+            since_end = i - prev_phrase["ef"]
+            if since_end < int(FPS * 0.35):
+                la = 0.20 * (1 - since_end / int(FPS * 0.35))
+                composite_phrase(canvas, prev_phrase["img"],
+                                 prev_phrase["ef"] - prev_phrase["sf"], 999,
+                                 prev_phrase["entrance"],
+                                 prev_phrase["rand_x"], prev_phrase["rand_y"],
+                                 alpha_override=la, blur=True)
+
+        # Active phrase (top layer)
+        if cur is not None:
+            fi = i - cur["sf"]
+            fo = cur["ef"] - i
+            if (cur["has_caps"] and
+                    (prev_phrase is None or cur["pi"] != prev_phrase["pi"])):
+                flash_cnt = 2
+            composite_phrase(canvas, cur["img"],
+                             fi, fo, cur["entrance"],
+                             cur["rand_x"], cur["rand_y"])
+            prev_phrase = cur
+
+        # CAPS flash
+        if flash_cnt > 0:
+            canvas = caps_flash(canvas, flash_cnt / 2, LIME_GREEN)
+            flash_cnt -= 1
+
+        # Vignette
+        cf     = canvas.astype(np.float32) / 255.0 * vignette
+        canvas = (cf * 255).clip(0, 255).astype(np.uint8)
+
+        # Ken Burns
+        canvas = ken_burns(canvas, i, n_frames)
+
+        # Grain
+        canvas = apply_grain(canvas, i)
+
+        writer.write(canvas)
+        if i % log_step == 0:
+            print(f"  [RENDER] {int(i/n_frames*100)}%"
+                  f"{'  ✨' if is_climax else ''}")
+
+    writer.release()
+    print("[RENDER] Re-encoding with ffmpeg...")
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", temp, "-c:v", "libx264",
+         "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p", "-an",
+         str(OUTPUT_VIDEO)],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        shutil.copy(temp, str(OUTPUT_VIDEO))
+    else:
+        Path(temp).unlink(missing_ok=True)
+    print(f"[✓] {OUTPUT_VIDEO} ({OUTPUT_VIDEO.stat().st_size//1024//1024}MB)")
+
+
+def main():
+    print("=" * 62)
+    print("  Shining Black Minimalist Engine v10")
+    print("  Matrix · Dust · Pixabay · Neon Waveform · No Shake")
+    print("=" * 62)
+
+    ensure_font()
+    ASSETS_DIR.mkdir(exist_ok=True)
+
+    if not INPUT_AUDIO.exists():
+        download_audio()
+    if not INPUT_SCRIPT.exists():
+        sys.exit("[ERROR] script.txt not found")
+
+    raw   = INPUT_SCRIPT.read_text(encoding="utf-8")
+    clean = clean_script(raw)
+    print(f"[INFO] Script: {len(clean.split())} words")
+
+    cmd      = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(INPUT_AUDIO)]
+    duration = float(subprocess.run(
+        cmd, capture_output=True, text=True).stdout.strip())
+    n_frames = int(duration * FPS)
+    print(f"[INFO] Duration: {duration:.2f}s")
+
+    keywords  = extract_keywords(clean, n=MAX_GIF_KEYWORDS + MAX_STICKER_KEYWORDS)
+    print(f"[PIXABAY] Keywords: {keywords}")
+    scheduler = build_asset_schedule(keywords, duration)
+
+    print("[TTS] Computing timestamps...")
+    word_timestamps = asyncio.run(generate_tts_with_timing(clean))
+    if not word_timestamps:
+        words = clean.split()
+        d     = duration / max(1, len(words))
+        word_timestamps = [{"word": w, "start": i*d, "duration": d}
+                           for i, w in enumerate(words)]
+
+    phrases  = group_into_phrases(word_timestamps, duration, LIME_GREEN)
+    rms_arr, wave_arr, _ = analyse_audio(str(INPUT_AUDIO), n_frames)
+
+    render_video(phrases, rms_arr, wave_arr, duration, LIME_GREEN, scheduler)
+
+    print("\n" + "=" * 62)
+    print("  [✓] DONE — raw_video.mp4 ready")
+    print("=" * 62)
+
+
+if __name__ == "__main__":
+    main()
