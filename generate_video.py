@@ -1,18 +1,16 @@
 """
-generate_video.py — Shining Black Minimalist Engine v9
+generate_video.py — Shining Black Minimalist Engine v10
 =======================================================
 Matrix/Cinematic aesthetic:
   - Deep black radial gradient background
   - Dust particle overlay (60-80 particles)
-  - Pixabay VIDEO GIFs (dominant, situational, 1-2s)
-  - Pixabay cutout/illustration stickers (edges, 3-4s)
+  - Pixabay GIF + vector sticker assets
   - Pure white elastic typography
   - Neon glow filled area waveform
   - Slow cinematic zoom 1.0→1.1x
   - NO shake — clean cinematic finish
   - 150px safe zone enforced everywhere
   - Headless GitHub Actions compatible
-  - Z-LAYERING: Background → Dust → Waveform → GIFs → Text → Stickers
 Output: raw_video.mp4 (1080×1920, 30fps, no audio)
 """
 
@@ -73,7 +71,7 @@ PIXABAY_KEY  = os.environ.get("PIXABAY_API_KEY", "")
 GH_TOKEN     = os.environ.get("GH_TOKEN", "")
 
 # ══════════════════════════════════════════════════════════════════
-#  COLOUR PALETTE — Shining Black
+#  COLOUR PALETTE — Shining Black (LIME GREEN UNIFIED)
 # ══════════════════════════════════════════════════════════════════
 
 BG_CENTER    = (38, 38, 38)         # BGR: Dark Charcoal center
@@ -81,19 +79,13 @@ BG_EDGE      = (5,  5,  5)          # BGR: Pure black edge
 TEXT_WHITE   = (255, 255, 255)      # Primary text
 TEXT_DIM     = (200, 200, 200)      # Secondary text
 
-# Accent options — neon tones that pop on black
-ACCENT_OPTIONS = [
-    (0,   255, 180),   # Neon cyan-green
-    (255, 200,   0),   # Electric yellow
-    (200,  80, 255),   # Neon purple
-    (0,   200, 255),   # Electric blue
-    (80,  255, 120),   # Lime green
-    (255,  80, 160),   # Hot pink
-]
+# UNIFIED ACCENT — Vibrant Lime Green #32CD32 (BGR: 50, 205, 50)
+LIME_GREEN   = (50, 205, 50)        # BGR: #32CD32
+ACCENT_OPTIONS = [LIME_GREEN]      # Only lime green, no other colors
 
-# Waveform neon glow
-WAVE_ACCENT  = (120, 255, 60)       # Lime green fill
-WAVE_GLOW    = (60,  180, 30)       # Glow layer
+# Waveform neon glow — matching lime green
+WAVE_ACCENT  = LIME_GREEN           # Lime green fill
+WAVE_GLOW    = (30, 150, 30)        # Darker lime glow layer
 
 # ══════════════════════════════════════════════════════════════════
 #  TYPOGRAPHY
@@ -123,59 +115,65 @@ KB_END       = 1.10
 N_PARTICLES  = 70   # 60-80 particles
 
 # ══════════════════════════════════════════════════════════════════
-#  STICKER CONFIG — CUTOUT STYLE (edges, small, 3-4s)
+#  STICKER CONFIG — OUTER 20% CORNER PLACEMENT ONLY
 # ══════════════════════════════════════════════════════════════════
 
-STICKER_SIZE        = 160           # Smaller cutout stickers
-STICKER_BORDER      = 0             # No border for cutout look
-STICKER_SHADOW      = 6
+STICKER_SIZE        = 140           # Slightly smaller for corner fit
+STICKER_BORDER      = 6
+STICKER_SHADOW      = 5
 STICKER_FLOAT_AMP   = 8
 STICKER_FLOAT_SPEED = 0.05
-STICKER_ANIM_FRAMES = int(FPS * 0.18)
-STICKER_ROT_RANGE   = 8             # Slight rotation for cutout feel
-STICKER_DURATION_S  = 3.5           # 3-4 seconds on screen
-STICKER_MAX_COUNT   = 3             # 2-3 stickers total
+STICKER_ANIM_FRAMES = int(FPS * 0.25)
+STICKER_ROT_RANGE   = 6
 
-# Pixabay keyword extraction
-MAX_GIF_KEYWORDS    = 5             # 4-5 GIFs
-MAX_STICKER_KEYWORDS = 3            # 2-3 stickers
+# Sticker display duration: 3-4 seconds
+STICKER_DURATION_SEC = (3.0, 4.0)
 
-# Sticker edge positions (corners, well away from text center)
+# OUTER 20% CORNER POSITIONS ONLY
+# Top/bottom 20% of height, left/right 20% of width
+CORNER_MARGIN_X = int(W * 0.05)      # 5% from edge
+CORNER_MARGIN_Y = int(H * 0.05)
+
 STICKER_POSITIONS = [
-    # Top-left edge
-    (SAFE_X1 + 10, SAFE_Y1 + 80),
-    # Top-right edge  
-    (SAFE_X2 - STICKER_SIZE - 10, SAFE_Y1 + 80),
-    # Bottom-left edge
-    (SAFE_X1 + 10, SAFE_Y2 - STICKER_SIZE - 40),
-    # Bottom-right edge
-    (SAFE_X2 - STICKER_SIZE - 10, SAFE_Y2 - STICKER_SIZE - 40),
-    # Mid-left edge
-    (SAFE_X1 + 10, int(H * 0.45)),
-    # Mid-right edge
-    (SAFE_X2 - STICKER_SIZE - 10, int(H * 0.45)),
+    # Top-left outer corner
+    (CORNER_MARGIN_X, CORNER_MARGIN_Y),
+    # Top-right outer corner
+    (W - STICKER_SIZE - CORNER_MARGIN_X, CORNER_MARGIN_Y),
+    # Bottom-left outer corner (above waveform safe zone)
+    (CORNER_MARGIN_X, H - STICKER_SIZE - CORNER_MARGIN_Y - 100),
+    # Bottom-right outer corner
+    (W - STICKER_SIZE - CORNER_MARGIN_X, H - STICKER_SIZE - CORNER_MARGIN_Y - 100),
 ]
 
 # ══════════════════════════════════════════════════════════════════
-#  GIF CONFIG — DOMINANT VIDEO OVERLAYS (center, 1-2s)
+#  GIF CONFIG — DOMINANT SITUATIONAL GIFS
 # ══════════════════════════════════════════════════════════════════
 
-GIF_WIDTH_PCT       = 0.55            # 55% of screen width (medium-dominant)
-GIF_HEIGHT_PCT      = 0.35            # 35% of screen height
-GIF_DURATION_S      = 1.5             # 1-2 seconds on screen
-GIF_MAX_COUNT       = 5               # 4-5 GIFs total
-GIF_POSITIONS = [
-    # Center-top (primary dominant position)
-    (int(W*0.5), int(H*0.30)),
-    # Center-mid
-    (int(W*0.5), int(H*0.45)),
-    # Center-bottom (above waveform)
-    (int(W*0.5), int(H*0.60)),
-    # Left-center
-    (int(W*0.30), int(H*0.40)),
-    # Right-center
-    (int(W*0.70), int(H*0.40)),
+GIF_SIZE_MIN        = 360
+GIF_SIZE_MAX        = 480
+GIF_DURATION_SEC    = (1.0, 2.0)
+GIF_FADE_FRAMES     = int(FPS * 0.15)
+
+# GIFs in outer edges only (not center), behind text
+GIF_EDGE_POSITIONS = [
+    # Left edge, vertically centered
+    (int(W * 0.12), int(H * 0.35)),
+    (int(W * 0.12), int(H * 0.65)),
+    # Right edge, vertically centered
+    (int(W * 0.88), int(H * 0.35)),
+    (int(W * 0.88), int(H * 0.65)),
+    # Top edge, horizontally centered
+    (int(W * 0.5), int(H * 0.12)),
+    # Bottom edge, above waveform
+    (int(W * 0.5), int(H * 0.78)),
 ]
+
+# ══════════════════════════════════════════════════════════════════
+#  ASSET COUNTS
+# ══════════════════════════════════════════════════════════════════
+
+MAX_GIF_KEYWORDS    = 5
+MAX_STICKER_KEYWORDS = 3
 
 # ══════════════════════════════════════════════════════════════════
 #  WAVEFORM
@@ -272,7 +270,7 @@ def clean_script(raw: str) -> str:
 
 
 def extract_keywords(text: str, n: int = 8) -> list:
-    """Extract top N meaningful keywords from script."""
+    """Extract top N meaningful keywords from script for asset search."""
     stops = {
         'the','a','an','and','or','but','in','on','at','to','for',
         'of','with','it','is','was','be','are','were','i','you',
@@ -280,7 +278,11 @@ def extract_keywords(text: str, n: int = 8) -> list:
         'have','had','from','not','so','then','when','what','about',
         'like','all','me','us','its','been','would','could','said',
         'told','thought','knew','felt','got','went','came','never',
-        'every','their','will','can','one','out','into','only','also'
+        'every','their','will','can','one','out','into','only','also',
+        'more','most','other','some','time','very','know','take',
+        'than','only','over','think','also','back','after','use',
+        'two','how','our','work','first','well','way','even','new',
+        'want','because','any','these','give','day','most','us'
     }
     words = re.findall(r'\b[a-z]{4,}\b', text.lower())
     freq  = {}
@@ -292,308 +294,296 @@ def extract_keywords(text: str, n: int = 8) -> list:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PIXABAY API — VIDEO GIFs (dominant, situational)
+#  PIXABAY API — MINIMALIST SEARCH QUERIES
 # ══════════════════════════════════════════════════════════════════
 
-def fetch_pixabay_video_gif(keyword: str) -> list:
+def fetch_pixabay_gif(keyword: str) -> list:
     """
-    Fetch VIDEO clips from Pixabay using keyword.
-    Returns list of PIL RGBA frames extracted from video.
-    These are DOMINANT overlays — medium size, center screen, 1-2s.
+    Fetch animated GIF from Pixabay using keyword + "minimalist".
+    Returns list of PIL RGBA frames sized for medium display.
     """
     if not PIXABAY_KEY:
         return []
     try:
-        # Search for videos (not images)
-        url = (f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}"
-               f"&q={requests.utils.quote(keyword)}"
-               f"&video_type=animation"
-               f"&per_page=5&safesearch=true")
+        # Search with "minimalist" suffix for cleaner results
+        search_query = f"{keyword} minimalist"
+        url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
+               f"&q={requests.utils.quote(search_query)}"
+               f"&image_type=animation"
+               f"&per_page=10&safesearch=true")
         res  = requests.get(url, timeout=15)
         data = res.json()
         hits = data.get("hits", [])
+        
+        # Fallback to illustration with minimalist
         if not hits:
-            # Fallback: any video
-            url2 = (f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}"
-                    f"&q={requests.utils.quote(keyword)}"
-                    f"&per_page=5&safesearch=true")
-            res   = requests.get(url2, timeout=15)
-            hits  = res.json().get("hits", [])
+            url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
+                   f"&q={requests.utils.quote(search_query)}"
+                   f"&image_type=illustration"
+                   f"&per_page=5&safesearch=true")
+            res = requests.get(url, timeout=15)
+            hits = res.json().get("hits", [])
+        
         if not hits:
             return []
-        
-        hit      = hits[0]
-        # Pixabay video API returns different URLs
-        vid_url  = hit.get("videos", {}).get("medium", {}).get("url", "")
-        if not vid_url:
-            vid_url = hit.get("videos", {}).get("small", {}).get("url", "")
-        if not vid_url:
+            
+        hit = hits[0]
+        gif_url = hit.get("webformatURL") or hit.get("previewURL", "")
+        if not gif_url:
             return []
-        
-        print(f"[PIXABAY VIDEO] Fetching '{keyword}': {vid_url[:60]}...")
-        return download_and_extract_video_frames(vid_url, keyword, "video_gif")
+            
+        r = requests.get(gif_url, timeout=20)
+        img_bytes = BytesIO(r.content)
+        return process_gif_frames(img_bytes, keyword)
     except Exception as e:
-        print(f"[PIXABAY] Video fetch failed for '{keyword}': {e}")
+        print(f"[PIXABAY] GIF fetch failed for '{keyword}': {e}")
         return []
 
 
-def download_and_extract_video_frames(vid_url: str, keyword: str, asset_type: str) -> list:
-    """Download video, extract frames as RGBA PIL Images."""
-    frames = []
-    temp_vid = f"temp_vid_{keyword.replace(' ','_')}.mp4"
+def fetch_pixabay_sticker(keyword: str) -> list:
+    """
+    Fetch transparent PNG sticker/cutout from Pixabay with minimalist query.
+    """
+    if not PIXABAY_KEY:
+        return []
     try:
-        r = requests.get(vid_url, timeout=30)
-        if r.status_code != 200:
-            return []
-        with open(temp_vid, "wb") as f:
-            f.write(r.content)
+        # Prioritize minimalist vector searches
+        queries = [
+            f"{keyword} minimalist vector",
+            f"{keyword} minimalist icon",
+            f"{keyword} minimalist sticker",
+            f"{keyword} minimalist cutout",
+        ]
         
-        cap = cv2.VideoCapture(temp_vid)
-        if not cap.isOpened():
-            return []
-        
-        # Extract frames at 10fps for GIF-like effect
-        frame_interval = max(1, int(cap.get(cv2.CAP_PROP_FPS) / 10))
-        count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if count % frame_interval == 0:
-                # Convert BGR to RGBA
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb).convert("RGBA")
-                frames.append(pil_img)
-            count += 1
-        cap.release()
-        
-        if frames:
-            print(f"[PIXABAY VIDEO] ✅ '{keyword}' ({asset_type}): {len(frames)} frames")
+        for q in queries:
+            url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
+                   f"&q={requests.utils.quote(q)}"
+                   f"&image_type=vector"
+                   f"&per_page=5&safesearch=true")
+            res = requests.get(url, timeout=15)
+            hits = res.json().get("hits", [])
+            
+            if hits:
+                hit = hits[0]
+                img_url = hit.get("webformatURL") or hit.get("previewURL", "")
+                if img_url:
+                    r = requests.get(img_url, timeout=20)
+                    return process_sticker_frames(BytesIO(r.content), keyword)
+                    
+        # Final fallback: any minimalist image
+        url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
+               f"&q={requests.utils.quote(keyword + ' minimalist')}"
+               f"&per_page=5&safesearch=true")
+        res = requests.get(url, timeout=15)
+        hits = res.json().get("hits", [])
+        if hits:
+            img_url = hits[0].get("webformatURL") or hits[0].get("previewURL", "")
+            if img_url:
+                r = requests.get(img_url, timeout=20)
+                return process_sticker_frames(BytesIO(r.content), keyword)
+                
     except Exception as e:
-        print(f"[VIDEO EXTRACT] Failed: {e}")
-    finally:
-        if os.path.exists(temp_vid):
-            os.remove(temp_vid)
+        print(f"[PIXABAY] Sticker fetch failed for '{keyword}': {e}")
+    return []
+
+
+def process_gif_frames(img_bytes: BytesIO, keyword: str) -> list:
+    """
+    Process GIF into RGBA frames sized for EDGE display (not center).
+    Medium size, clean edges, no border for GIFs.
+    """
+    frames = []
+    try:
+        img = Image.open(img_bytes)
+        target_size = random.randint(GIF_SIZE_MIN, GIF_SIZE_MAX)
+        
+        if hasattr(img, 'n_frames') and img.n_frames > 1:
+            while True:
+                fr = img.copy().convert("RGBA")
+                fr = fr.resize((target_size, target_size), Image.LANCZOS)
+                frames.append(np.array(fr))
+                try:
+                    img.seek(img.tell() + 1)
+                except EOFError:
+                    break
+        else:
+            fr = img.convert("RGBA").resize((target_size, target_size), Image.LANCZOS)
+            frames.append(np.array(fr))
+            
+        if frames:
+            print(f"[PIXABAY] ✅ GIF '{keyword}': {len(frames)} frames, {target_size}px")
+    except Exception as e:
+        print(f"[ASSET] GIF process failed: {e}")
     return frames
 
 
-# ══════════════════════════════════════════════════════════════════
-#  PIXABAY API — CUTOUT STICKERS (illustration/transparent, edges)
-# ══════════════════════════════════════════════════════════════════
-
-def fetch_pixabay_cutout_sticker(keyword: str) -> list:
+def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
     """
-    Fetch ILLUSTRATION/VECTOR cutout stickers from Pixabay.
-    Uses 'illustration' type with transparent background preference.
-    These are SMALL edge stickers — 3-4s duration.
+    Process sticker into RGBA frames with CUTOUT styling.
+    White border, subtle shadow, edge-appropriate size.
     """
-    if not PIXABAY_KEY:
-        return []
-    try:
-        # Primary: illustration type (cutout/art style)
-        url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
-               f"&q={requests.utils.quote(keyword)}"
-               f"&image_type=illustration"
-               f"&colors=transparent"
-               f"&per_page=5&safesearch=true")
-        res  = requests.get(url, timeout=15)
-        data = res.json()
-        hits = data.get("hits", [])
-        
-        # Fallback 1: vector type
-        if not hits:
-            url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
-                   f"&q={requests.utils.quote(keyword)}"
-                   f"&image_type=vector"
-                   f"&per_page=5&safesearch=true")
-            res  = requests.get(url, timeout=15)
-            hits = res.json().get("hits", [])
-        
-        # Fallback 2: any image with transparent preference
-        if not hits:
-            url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
-                   f"&q={requests.utils.quote(keyword)}+cutout"
-                   f"&colors=transparent"
-                   f"&per_page=5&safesearch=true")
-            res  = requests.get(url, timeout=15)
-            hits = res.json().get("hits", [])
-        
-        if not hits:
-            return []
-        
-        hit     = hits[0]
-        img_url = hit.get("webformatURL") or hit.get("previewURL", "")
-        if not img_url:
-            return []
-        
-        # Use larger size if available
-        if "largeImageURL" in hit:
-            img_url = hit["largeImageURL"]
-        elif "fullHDURL" in hit:
-            img_url = hit["fullHDURL"]
-        
-        r = requests.get(img_url, timeout=20)
-        return process_cutout_sticker_frames(BytesIO(r.content), keyword)
-    except Exception as e:
-        print(f"[PIXABAY] Sticker fetch failed for '{keyword}': {e}")
-        return []
-
-
-def process_cutout_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
-    """
-    Process image into cutout sticker style.
-    Applies: background removal simulation, resize, subtle shadow, slight rotation.
-    Returns list of RGBA numpy arrays.
-    """
-    rotation = random.uniform(-STICKER_ROT_RANGE, STICKER_ROT_RANGE)
-    frames   = []
-
-    def process_one(fr: Image.Image) -> np.ndarray:
-        fr = fr.convert("RGBA")
-        
-        # Remove white/light backgrounds to simulate cutout
-        datas = fr.getdata()
-        new_data = []
-        for item in datas:
-            r, g, b, a = item
-            # Make near-white pixels transparent (cutout effect)
-            if r > 240 and g > 240 and b > 240:
-                new_data.append((r, g, b, 0))
-            else:
-                new_data.append(item)
-        fr.putdata(new_data)
-        
-        # Resize to sticker size
-        fr = fr.resize((STICKER_SIZE, STICKER_SIZE), Image.LANCZOS)
-
-        # Subtle drop shadow for depth
-        sh_size = STICKER_SIZE + STICKER_SHADOW*2
-        shadow  = Image.new("RGBA", (sh_size, sh_size), (0,0,0,0))
-        sd_base = Image.new("RGBA", (STICKER_SIZE, STICKER_SIZE), (0,0,0,100))
-        shadow.alpha_composite(sd_base, (STICKER_SHADOW, STICKER_SHADOW))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=5))
-
-        # Composite shadow + sticker
-        final = shadow.copy()
-        final.alpha_composite(fr, (STICKER_SHADOW//2, STICKER_SHADOW//2))
-
-        # Slight rotation
-        final = final.rotate(rotation, expand=True, resample=Image.BICUBIC)
-        return np.array(final)
-
+    frames = []
     try:
         img = Image.open(img_bytes)
+        size_in = STICKER_SIZE - STICKER_BORDER * 2
+        rotation = random.uniform(-STICKER_ROT_RANGE, STICKER_ROT_RANGE)
+        
+        def process_one(fr: Image.Image) -> np.ndarray:
+            fr = fr.convert("RGBA").resize((size_in, size_in), Image.LANCZOS)
+            
+            # Soft shadow for depth
+            sh_size = STICKER_SIZE + STICKER_SHADOW * 2
+            shadow = Image.new("RGBA", (sh_size, sh_size), (0, 0, 0, 0))
+            sd_base = Image.new("RGBA", (size_in, size_in), (0, 0, 0, 120))
+            shadow.alpha_composite(sd_base,
+                                   (STICKER_BORDER + STICKER_SHADOW + 2,
+                                    STICKER_BORDER + STICKER_SHADOW + 2))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=5))
+            
+            # White border for cutout sticker look
+            bordered = Image.new("RGBA", (STICKER_SIZE, STICKER_SIZE),
+                                (255, 255, 255, 255))
+            bordered.alpha_composite(fr, (STICKER_BORDER, STICKER_BORDER))
+            
+            final = shadow.copy()
+            final.alpha_composite(bordered, (0, 0))
+            final = final.rotate(rotation, expand=True, resample=Image.BICUBIC)
+            return np.array(final)
+            
         if hasattr(img, 'n_frames') and img.n_frames > 1:
             while True:
                 frames.append(process_one(img.copy()))
                 try:
-                    img.seek(img.tell()+1)
+                    img.seek(img.tell() + 1)
                 except EOFError:
                     break
         else:
             frames.append(process_one(img))
+            
+        if frames:
+            print(f"[PIXABAY] ✅ Sticker '{keyword}': {len(frames)} frames, rot={rotation:.0f}°")
     except Exception as e:
-        print(f"[STICKER] Process failed: {e}")
-
-    if frames:
-        print(f"[PIXABAY STICKER] ✅ '{keyword}': {len(frames)} frame(s), rot={rotation:.0f}°")
+        print(f"[ASSET] Sticker process failed: {e}")
     return frames
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ASSET SCHEDULE BUILDER — SITUATIONAL PLACEMENT
+#  ASSET SCHEDULING — OUTER 20% ONLY, BEHIND TEXT
 # ══════════════════════════════════════════════════════════════════
 
-def build_asset_schedule(keywords: list, duration: float, 
-                         phrase_timings: list) -> tuple:
+class AssetScheduler:
     """
-    Build schedules for:
-    - VIDEO GIFs: 4-5 dominant center overlays, 1-2s each, situational timing
-    - CUTOUT STICKERS: 2-3 edge stickers, 3-4s each, avoiding text overlap
+    Schedules GIFs and stickers in OUTER 20% only, behind text layer.
+    Ensures no overlap with center text area.
+    """
+    def __init__(self, duration: float):
+        self.duration = duration
+        self.total_frames = int(duration * FPS)
+        self.gifs = []      # [(start, end, frames, x, y, size)]
+        self.stickers = []  # [(start, end, frames, x, y)]
+        self.occupied_zones = []
+        
+    def is_zone_free(self, start_f, end_f, x1, y1, x2, y2, buffer=50):
+        """Check if zone is free for given time range."""
+        for (os, oe, ox1, oy1, ox2, oy2) in self.occupied_zones:
+            if not (end_f < os or start_f > oe):
+                if not (x2 + buffer < ox1 or x1 - buffer > ox2 or 
+                        y2 + buffer < oy1 or y1 - buffer > oy2):
+                    return False
+        return True
+        
+    def add_zone(self, start_f, end_f, x1, y1, x2, y2):
+        self.occupied_zones.append((start_f, end_f, x1, y1, x2, y2))
+        
+    def schedule_gif(self, frames, keyword_idx):
+        """Schedule GIF at OUTER EDGE position (not center)."""
+        if not frames:
+            return False
+            
+        dur = random.uniform(*GIF_DURATION_SEC)
+        start_f = random.randint(int(FPS * 2), 
+                                max(int(FPS * 2), self.total_frames - int(dur * FPS) - int(FPS * 2)))
+        end_f = min(start_f + int(dur * FPS), self.total_frames)
+        
+        # Only use edge positions (outer 20%)
+        positions = GIF_EDGE_POSITIONS.copy()
+        random.shuffle(positions)
+        
+        for (px, py) in positions:
+            size = frames[0].shape[1]
+            half = size // 2
+            x1, y1 = px - half, py - half
+            x2, y2 = px + half, py + half
+            
+            # Ensure within safe bounds but OUTER area
+            x1 = max(0, x1); y1 = max(0, y1)
+            x2 = min(W, x2); y2 = min(H, y2)
+            
+            if self.is_zone_free(start_f, end_f, x1, y1, x2, y2, buffer=60):
+                self.gifs.append((start_f, end_f, frames, px, py, size))
+                self.add_zone(start_f, end_f, x1, y1, x2, y2)
+                print(f"[SCHEDULE] GIF '{keyword_idx}': frames {start_f}-{end_f} @ ({px},{py}) [EDGE]")
+                return True
+                
+        return False
+        
+    def schedule_sticker(self, frames, keyword_idx):
+        """Schedule sticker in OUTER CORNER only."""
+        if not frames:
+            return False
+            
+        dur = random.uniform(*STICKER_DURATION_SEC)
+        start_f = random.randint(int(FPS * 3), 
+                                max(int(FPS * 3), self.total_frames - int(dur * FPS) - int(FPS * 3)))
+        end_f = min(start_f + int(dur * FPS), self.total_frames)
+        
+        # Only use corner positions (outer 20%)
+        positions = STICKER_POSITIONS.copy()
+        random.shuffle(positions)
+        
+        for (px, py) in positions:
+            size = frames[0].shape[1]
+            x1, y1 = px, py
+            x2, y2 = px + size, py + size
+            
+            if self.is_zone_free(start_f, end_f, x1, y1, x2, y2, buffer=30):
+                self.stickers.append((start_f, end_f, frames, px, py))
+                self.add_zone(start_f, end_f, x1, y1, x2, y2)
+                print(f"[SCHEDULE] Sticker '{keyword_idx}': frames {start_f}-{end_f} @ ({px},{py}) [CORNER]")
+                return True
+                
+        return False
+
+
+def build_asset_schedule(keywords: list, duration: float) -> AssetScheduler:
+    """Build schedule with 4-5 edge GIFs and 2-3 corner stickers."""
+    scheduler = AssetScheduler(duration)
     
-    Returns: (gif_schedule, sticker_schedule)
-    gif_schedule: [(start_frame, end_frame, frames, cx, cy, w, h)]
-    sticker_schedule: [(start_frame, end_frame, frames, corner_x, corner_y)]
-    """
     if not PIXABAY_KEY:
         print("[PIXABAY] No API key — skipping assets")
-        return [], []
-    
-    total_frames = int(duration * FPS)
-    
-    # ── VIDEO GIFs (dominant, situational) ───────────────────────
-    gif_schedule = []
-    gif_kws = keywords[:MAX_GIF_KEYWORDS]
-    
-    # Distribute GIFs across video duration, aligned with phrase changes
-    gif_count = min(len(gif_kws), GIF_MAX_COUNT)
-    if gif_count > 0 and phrase_timings:
-        # Place GIFs at phrase transition points or evenly spaced
-        phase_points = []
-        for i, p in enumerate(phrase_timings):
-            if i % 2 == 0:  # Every other phrase
-                mid = (p["start_sec"] + p["end_sec"]) / 2
-                phase_points.append(mid)
+        return scheduler
         
-        # Ensure we have enough points
-        while len(phase_points) < gif_count:
-            phase_points.append(duration * (len(phase_points) + 1) / (gif_count + 1))
+    print(f"[PIXABAY] Fetching MINIMALIST assets for: {keywords}")
+    
+    # Schedule 4-5 GIFs at edges
+    gif_keywords = keywords[:MAX_GIF_KEYWORDS]
+    for i, kw in enumerate(gif_keywords):
+        frames = fetch_pixabay_gif(kw)
+        if frames:
+            scheduler.schedule_gif(frames, kw)
+            
+    # Schedule 2-3 stickers at corners
+    sticker_keywords = keywords[MAX_GIF_KEYWORDS:MAX_GIF_KEYWORDS + MAX_STICKER_KEYWORDS]
+    while len(sticker_keywords) < MAX_STICKER_KEYWORDS:
+        sticker_keywords.append(random.choice(keywords[:MAX_GIF_KEYWORDS]))
         
-        for idx, kw in enumerate(gif_kws[:gif_count]):
-            frames = fetch_pixabay_video_gif(kw)
-            if not frames:
-                continue
+    for i, kw in enumerate(sticker_keywords):
+        frames = fetch_pixabay_sticker(kw)
+        if frames:
+            scheduler.schedule_sticker(frames, kw)
             
-            # Position: center-dominant, cycling through positions
-            pos_idx = idx % len(GIF_POSITIONS)
-            cx, cy = GIF_POSITIONS[pos_idx]
-            
-            # Size: medium-dominant
-            gif_w = int(W * GIF_WIDTH_PCT)
-            gif_h = int(H * GIF_HEIGHT_PCT)
-            
-            # Timing: 1-2 seconds
-            start_sec = phase_points[idx % len(phase_points)]
-            start_sec = max(0.5, min(start_sec, duration - GIF_DURATION_S - 0.5))
-            start_f = int(start_sec * FPS)
-            end_f = min(start_f + int(GIF_DURATION_S * FPS), total_frames)
-            
-            gif_schedule.append((start_f, end_f, frames, cx, cy, gif_w, gif_h))
-            print(f"[GIF SCHEDULE] '{kw}' @ frame {start_f}-{end_f}, pos=({cx},{cy})")
-    
-    # ── CUTOUT STICKERS (edges, longer duration) ──────────────────
-    sticker_schedule = []
-    sticker_kws = keywords[MAX_GIF_KEYWORDS:MAX_GIF_KEYWORDS + MAX_STICKER_KEYWORDS]
-    
-    sticker_count = min(len(sticker_kws), STICKER_MAX_COUNT)
-    if sticker_count > 0:
-        # Stagger stickers throughout video
-        stagger = duration / (sticker_count + 1)
-        used_positions = []
-        
-        for idx, kw in enumerate(sticker_kws[:sticker_count]):
-            frames = fetch_pixabay_cutout_sticker(kw)
-            if not frames:
-                continue
-            
-            # Pick edge position, avoiding used ones
-            avail = [p for p in STICKER_POSITIONS if p not in used_positions]
-            if not avail:
-                avail = STICKER_POSITIONS
-            pos = random.choice(avail)
-            used_positions.append(pos)
-            
-            # Timing: 3-4 seconds
-            start_sec = stagger * (idx + 1)
-            start_sec = max(0.5, min(start_sec, duration - STICKER_DURATION_S - 0.5))
-            start_f = int(start_sec * FPS)
-            end_f = min(start_f + int(STICKER_DURATION_S * FPS), total_frames)
-            
-            sticker_schedule.append((start_f, end_f, frames, pos[0], pos[1]))
-            print(f"[STICKER SCHEDULE] '{kw}' @ frame {start_f}-{end_f}, pos={pos}")
-    
-    print(f"[ASSETS] {len(gif_schedule)} GIFs, {len(sticker_schedule)} stickers scheduled")
-    return gif_schedule, sticker_schedule
+    print(f"[SCHEDULE] {len(scheduler.gifs)} GIFs (edge), {len(scheduler.stickers)} stickers (corner)")
+    return scheduler
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -698,7 +688,7 @@ def build_black_gradient() -> np.ndarray:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  NEON GLOW FILLED AREA WAVEFORM
+#  NEON GLOW FILLED AREA WAVEFORM — LIME GREEN
 # ══════════════════════════════════════════════════════════════════
 
 def draw_neon_waveform(canvas: np.ndarray,
@@ -714,7 +704,7 @@ def draw_neon_waveform(canvas: np.ndarray,
 
     ci   = WAVE_POINTS//2
 
-    # Pass 1: wide glow
+    # Pass 1: wide glow (lime green)
     pts  = np.array([(int(xs[i]),int(ys[i])) for i in range(WAVE_POINTS)],
                     dtype=np.int32).reshape(-1,1,2)
     ov   = canvas.copy()
@@ -726,14 +716,14 @@ def draw_neon_waveform(canvas: np.ndarray,
     cv2.polylines(ov2,[pts],False,WAVE_GLOW,8,cv2.LINE_AA)
     cv2.addWeighted(ov2,0.55,canvas,0.45,0,canvas)
 
-    # Pass 3: filled polygon
+    # Pass 3: filled polygon (lime green tint)
     top_pts  = [(int(xs[i]),int(ys[i])) for i in range(WAVE_POINTS)]
     base_pts = [(int(xs[i]),WAVE_Y) for i in range(WAVE_POINTS-1,-1,-1)]
     poly     = np.array(top_pts+base_pts, dtype=np.int32)
     fill_col = tuple(max(0,int(c*0.45)) for c in WAVE_ACCENT)
     cv2.fillPoly(canvas,[poly],fill_col)
 
-    # Pass 4: bright top edge line
+    # Pass 4: bright top edge line (lime green)
     for i in range(WAVE_POINTS-1):
         brt  = max(0.30, 1.0-abs(i-ci)/ci*0.65)
         col  = tuple(int(c*brt) for c in WAVE_ACCENT)
@@ -749,7 +739,7 @@ def draw_neon_waveform(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PHRASE RENDERING — WHITE TEXT ON BLACK
+#  PHRASE RENDERING — LIME GREEN ACCENTS ONLY
 # ══════════════════════════════════════════════════════════════════
 
 def measure_text(text: str, font: ImageFont.FreeTypeFont) -> tuple:
@@ -785,6 +775,10 @@ def wrap_words(word_data: list, max_w: int) -> list:
 def render_phrase_image(text: str,
                         use_accent: bool,
                         accent_col: tuple) -> Image.Image:
+    """
+    White text on transparent background.
+    Accent words get LIME GREEN glow + underline.
+    """
     raw_words = text.split()
     PAD       = 20
     GAP_X     = 16
@@ -794,6 +788,7 @@ def render_phrase_image(text: str,
     for w in raw_words:
         is_cap = bool(re.search(r'[A-Z]{2,}', w))
         is_acc = is_cap or use_accent
+        # ALL accents use lime green
         color  = accent_col if is_acc else TEXT_WHITE
         font, sz = fit_font_size(w, is_cap)
         tw, th   = measure_text(w, font)
@@ -818,14 +813,17 @@ def render_phrase_image(text: str,
         for wd in line:
             rgb = (wd["color"][2],wd["color"][1],wd["color"][0])
             if wd["is_acc"]:
+                # LIME GREEN neon glow
                 glow = tuple(min(255,int(c*1.35)) for c in rgb)
                 for gd,ga in [(8,35),(5,65),(3,95)]:
                     for dx,dy in [(gd,0),(-gd,0),(0,gd),(0,-gd)]:
                         draw.text((x+dx,y+dy),wd["text"],
                                   font=wd["font"],fill=glow+(ga,))
+                # Lime green underline
                 draw.line([(x,y+wd["h"]+4),(x+wd["w"],y+wd["h"]+4)],
                           fill=rgb+(210,),width=3)
             else:
+                # Subtle glow on white text
                 draw.text((x+1,y+1),wd["text"],font=wd["font"],
                           fill=(255,255,255,50))
             draw.text((x,y),wd["text"],font=wd["font"],fill=rgb+(255,))
@@ -836,7 +834,7 @@ def render_phrase_image(text: str,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PHRASE GROUPING
+#  PHRASE GROUPING — CENTER SAFE ZONE ONLY
 # ══════════════════════════════════════════════════════════════════
 
 def group_into_phrases(word_timestamps: list,
@@ -869,12 +867,15 @@ def group_into_phrases(word_timestamps: list,
         use_acc   = has_caps or (pi in accent_set)
         entrance  = random.choice(entrances)
 
-        # Non-overlapping Y — keep in center band, away from edges
-        for _ in range(12):
-            ry = random.randint(int(H*0.25), int(H*0.55))
+        # CENTER SAFE ZONE ONLY — avoid outer 20% where GIFs/stickers live
+        # Keep text in middle 60% of frame vertically and horizontally
+        for _ in range(25):
+            # Central area: 20% to 80% of height, well within safe zone
+            ry = random.randint(int(H * 0.22), int(H * 0.62))
             if prev_y is None or abs(ry-prev_y) > 180: break
         prev_y = ry
-        rx = random.randint(SAFE_X1+60, SAFE_X2-60)
+        # Center X with padding from edges
+        rx = random.randint(int(W * 0.25), int(W * 0.75))
 
         phrases.append({
             "text": clean, "start_sec": start_sec,
@@ -887,7 +888,7 @@ def group_into_phrases(word_timestamps: list,
 
     if phrases:
         phrases[-1]["is_climax"] = True
-    print(f"[PHRASE] {len(phrases)} phrases")
+    print(f"[PHRASE] {len(phrases)} phrases (center zone)")
     return phrases
 
 
@@ -920,7 +921,7 @@ def motion_blur(img: Image.Image, entrance: str, t: float) -> Image.Image:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE PHRASE (TEXT LAYER)
+#  COMPOSITE PHRASE — TOP LAYER (OVER ASSETS)
 # ══════════════════════════════════════════════════════════════════
 
 def composite_phrase(canvas: np.ndarray,
@@ -959,8 +960,9 @@ def composite_phrase(canvas: np.ndarray,
         nw,nh = max(1,int(iw*scale)),max(1,int(ih*scale))
         disp  = img.resize((nw,nh),Image.LANCZOS)
 
-    px = max(SAFE_X1, min(SAFE_X2-disp.width,  cx-disp.width//2+xo))
-    py = max(SAFE_Y1, min(SAFE_Y2-disp.height, cy-disp.height//2+yo))
+    # Center-safe clamped position
+    px = max(int(W*0.15), min(int(W*0.85)-disp.width,  cx-disp.width//2+xo))
+    py = max(int(H*0.15), min(int(H*0.75)-disp.height, cy-disp.height//2+yo))
 
     cr = cv2.cvtColor(canvas,cv2.COLOR_BGR2RGB)
     cp = Image.fromarray(cr).convert("RGBA")
@@ -973,132 +975,131 @@ def composite_phrase(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE VIDEO GIF (DOMINANT CENTER OVERLAY)
+#  COMPOSITE GIF — BEHIND TEXT, AT EDGES
 # ══════════════════════════════════════════════════════════════════
 
-def composite_video_gif(canvas: np.ndarray,
-                        frames: list,
-                        frame_idx: int,
-                        start_frame: int,
-                        end_frame: int,
-                        cx: int, cy: int,
-                        target_w: int, target_h: int) -> None:
-    """
-    Composite a dominant video GIF at center position.
-    GIFs appear BETWEEN background and text layers.
-    Scale up/down with elastic animation.
-    """
-    if not frames or frame_idx < start_frame or frame_idx >= end_frame:
+def composite_gif(canvas: np.ndarray,
+                  frames: list,
+                  frame_idx: int,
+                  start_frame: int,
+                  end_frame: int,
+                  cx: int,
+                  cy: int,
+                  size: int) -> None:
+    """Composite GIF at edge position, behind text layer."""
+    if not frames or frame_idx < start_frame or frame_idx > end_frame:
         return
+        
+    since_start = frame_idx - start_frame
+    until_end = end_frame - frame_idx
     
-    since = frame_idx - start_frame
-    total = end_frame - start_frame
+    # Smooth fade
+    alpha = 1.0
+    if since_start < GIF_FADE_FRAMES:
+        alpha = since_start / GIF_FADE_FRAMES
+    elif until_end < GIF_FADE_FRAMES:
+        alpha = until_end / GIF_FADE_FRAMES
+    alpha = max(0.0, min(1.0, alpha))
     
-    # Animation: elastic in for first 15%, fade out last 20%
-    if since < int(FPS * 0.15):
-        t = since / max(1, int(FPS * 0.15))
-        scale = max(0.1, elastic_out(t) * 1.0)
-        alpha = min(1.0, t * 4)
-    elif since > total - int(FPS * 0.20):
-        t = (total - since) / max(1, int(FPS * 0.20))
-        scale = 1.0
-        alpha = max(0.0, t)
+    gif_frame_idx = (since_start // 2) % len(frames)
+    raw = frames[gif_frame_idx]
+    
+    # Subtle pulse
+    pulse = 1.0 + 0.03 * math.sin(since_start * 0.08)
+    disp_size = int(size * pulse)
+    
+    if disp_size != raw.shape[1]:
+        disp = cv2.resize(raw, (disp_size, disp_size))
     else:
-        scale = 1.0
-        alpha = 1.0
+        disp = raw.copy()
+    dh, dw = disp.shape[:2]
     
-    # Cycle through GIF frames
-    gif_i = since % len(frames)
-    raw = frames[gif_i]
+    # Edge position (outer 20%)
+    px = cx - dw // 2
+    py = cy - dh // 2
     
-    # Resize to target dimensions
-    nw = max(1, int(target_w * scale))
-    nh = max(1, int(target_h * scale))
-    disp = raw.resize((nw, nh), Image.LANCZOS)
+    # Hard clamp to screen edges (not safe zone — edges are intentional)
+    px = max(0, min(W - dw, px))
+    py = max(0, min(H - dh, py))
     
-    # Center position
-    px = cx - nw // 2
-    py = cy - nh // 2
-    
-    # Clamp to screen bounds
-    px = max(0, min(W - nw, px))
-    py = max(0, min(H - nh, py))
-    
-    # Alpha blend onto canvas
+    # Composite
     cr = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
     cp = Image.fromarray(cr).convert("RGBA")
+    si = Image.fromarray(disp)
     
-    r, g, b, a = disp.split()
+    if si.mode != 'RGBA':
+        si = si.convert("RGBA")
+        
+    r, g, b, a = si.split()
     a = a.point(lambda v: int(v * alpha))
-    disp = Image.merge("RGBA", (r, g, b, a))
+    si = Image.merge("RGBA", (r, g, b, a))
     
-    cp.alpha_composite(disp, (px, py))
+    cp.alpha_composite(si, (max(0, px), max(0, py)))
     np.copyto(canvas, cv2.cvtColor(
         np.array(cp.convert("RGB")), cv2.COLOR_RGB2BGR))
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE CUTOUT STICKER (EDGE, ON TOP OF EVERYTHING)
+#  COMPOSITE STICKER — BEHIND TEXT, OUTER CORNERS
 # ══════════════════════════════════════════════════════════════════
 
-def composite_cutout_sticker(canvas: np.ndarray,
-                             frames: list,
-                             frame_idx: int,
-                             start_frame: int,
-                             end_frame: int,
-                             corner_x: int,
-                             corner_y: int) -> None:
-    """
-    Composite a cutout sticker at edge position.
-    Stickers appear ON TOP of text layer (highest z-index).
-    Float animation + elastic pop-in.
-    """
-    if not frames or frame_idx < start_frame or frame_idx >= end_frame:
+def composite_sticker(canvas: np.ndarray,
+                      frames: list,
+                      frame_idx: int,
+                      start_frame: int,
+                      end_frame: int,
+                      corner_x: int,
+                      corner_y: int) -> None:
+    """Composite sticker at outer corner, behind text layer."""
+    if not frames or frame_idx < start_frame or frame_idx > end_frame:
         return
-    
+        
     since = frame_idx - start_frame
-    total = end_frame - start_frame
+    until_end = end_frame - frame_idx
     
-    # Elastic pop-in
+    # Pop-in animation
     if since < STICKER_ANIM_FRAMES:
         t = since / STICKER_ANIM_FRAMES
         scale = max(0.05, elastic_out(t) * 1.1)
         alpha = min(1.0, t * 4)
-    elif since > total - int(FPS * 0.15):
-        t = (total - since) / max(1, int(FPS * 0.15))
-        scale = 1.0
-        alpha = max(0.0, t)
     else:
         scale = 1.0
         alpha = 1.0
+        
+    # Fade out
+    if until_end < int(FPS * 0.3):
+        alpha *= (until_end / int(FPS * 0.3))
+    alpha = max(0.0, min(1.0, alpha))
     
-    # Float animation
+    # Floating
     float_y = int(STICKER_FLOAT_AMP * math.sin(since * STICKER_FLOAT_SPEED))
     
-    gif_i = (since // 2) % len(frames)
+    gif_i = (since // 3) % len(frames)
     raw = frames[gif_i]
-    
     sh, sw = raw.shape[:2]
+    
     if abs(scale - 1.0) > 0.01:
-        nw = max(1, int(sw * scale))
-        nh = max(1, int(sh * scale))
+        nw, nh = max(1, int(sw * scale)), max(1, int(sh * scale))
         disp = cv2.resize(raw, (nw, nh))
     else:
-        disp = raw
-    
+        disp = raw.copy()
     dh, dw = disp.shape[:2]
-    
-    # Clamp to safe zone edges
-    px = max(SAFE_X1, min(SAFE_X2 - dw, corner_x))
-    py = max(SAFE_Y1, min(SAFE_Y2 - dh, corner_y + float_y))
-    
-    # Alpha blend
+
+    # Outer corner position (5% margin from screen edge)
+    px = corner_x
+    py = corner_y + float_y
+
     cr = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
     cp = Image.fromarray(cr).convert("RGBA")
     si = Image.fromarray(disp)
+    
+    if si.mode != 'RGBA':
+        si = si.convert("RGBA")
+        
     r, g, b, a = si.split()
     a = a.point(lambda v: int(v * alpha))
     si = Image.merge("RGBA", (r, g, b, a))
+    
     cp.alpha_composite(si, (max(0, px), max(0, py)))
     np.copyto(canvas, cv2.cvtColor(
         np.array(cp.convert("RGB")), cv2.COLOR_RGB2BGR))
@@ -1135,201 +1136,12 @@ def ken_burns(frame: np.ndarray, idx: int, total: int) -> np.ndarray:
 
 def caps_flash(canvas: np.ndarray,
                intensity: float, accent: tuple) -> np.ndarray:
+    """Flash using LIME GREEN accent."""
     ov = np.full_like(canvas, accent, dtype=np.uint8)
     return cv2.addWeighted(canvas,1-intensity*0.10,ov,intensity*0.10,0)
 
 
 # ══════════════════════════════════════════════════════════════════
-#  MAIN RENDER — Z-LAYERING: BG → Dust → Waveform → GIFs → Text → Stickers
+#  MAIN RENDER — LAYER ORDER: BG → ASSETS → TEXT → EFFECTS
 # ══════════════════════════════════════════════════════════════════
 
-def render_video(phrases: list,
-                 rms_arr: np.ndarray,
-                 wave_arr: np.ndarray,
-                 duration: float,
-                 accent_bgr: tuple,
-                 gif_schedule: list,
-                 sticker_schedule: list) -> None:
-
-    n_frames     = len(rms_arr)
-    vignette     = build_vignette()
-    bg_base      = build_black_gradient()
-    particles    = init_particles()
-    climax_start = int((duration-CLIMAX_SECS)*FPS)
-
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    temp   = "raw_temp.mp4"
-    writer = cv2.VideoWriter(temp,fourcc,FPS,(W,H))
-    if not writer.isOpened():
-        sys.exit("[ERROR] VideoWriter failed")
-
-    print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases | "
-          f"{len(gif_schedule)} GIFs | {len(sticker_schedule)} stickers")
-
-    # Pre-render phrase images
-    for p in phrases:
-        p["img"] = render_phrase_image(
-            p["text"], p["use_accent"], accent_bgr)
-        p["sf"] = int(p["start_sec"]*FPS)
-        p["ef"] = min(int(p["end_sec"]*FPS), n_frames)
-
-    frame_phrase = {}
-    for pi,p in enumerate(phrases):
-        p["pi"] = pi
-        for f in range(p["sf"],p["ef"]):
-            frame_phrase[f] = p
-
-    flash_cnt   = 0
-    prev_phrase = None
-    log_step    = max(1, n_frames//20)
-
-    for i in range(n_frames):
-        is_climax = i >= climax_start
-
-        # ═══════════════════════════════════════════════════════════
-        # LAYER 1: Shining black background
-        canvas = bg_base.copy()
-
-        # LAYER 2: Dust particles
-        draw_particles(canvas, particles)
-
-        # LAYER 3: Neon waveform
-        draw_neon_waveform(canvas, wave_arr[i], rms_arr[i], is_climax)
-
-        # LAYER 4: VIDEO GIFs (dominant, behind text)
-        for (st_f, end_f, frames, cx, cy, gw, gh) in gif_schedule:
-            if st_f <= i < end_f:
-                composite_video_gif(canvas, frames, i, st_f, end_f, cx, cy, gw, gh)
-
-        # ═══════════════════════════════════════════════════════════
-        # LAYER 5: TEXT PHRASES (on top of GIFs, below stickers)
-        cur = frame_phrase.get(i)
-
-        # Previous phrase at 20% + blur (persistence)
-        if (prev_phrase is not None and cur is not None
-                and cur["pi"] != prev_phrase["pi"]):
-            since_end = i - prev_phrase["ef"]
-            if since_end < int(FPS * 0.35):
-                la = 0.20 * (1 - since_end / int(FPS * 0.35))
-                composite_phrase(canvas, prev_phrase["img"],
-                                 prev_phrase["ef"] - prev_phrase["sf"], 999,
-                                 prev_phrase["entrance"],
-                                 prev_phrase["rand_x"], prev_phrase["rand_y"],
-                                 alpha_override=la, blur=True)
-
-        # Active phrase
-        if cur is not None:
-            fi = i - cur["sf"]
-            fo = cur["ef"] - i
-            if (cur["has_caps"] and
-                    (prev_phrase is None or cur["pi"] != prev_phrase["pi"])):
-                flash_cnt = 2
-            composite_phrase(canvas, cur["img"],
-                             fi, fo, cur["entrance"],
-                             cur["rand_x"], cur["rand_y"])
-            prev_phrase = cur
-
-        # LAYER 6: CUTOUT STICKERS (on top of everything)
-        for (st_f, end_f, frames, sx, sy) in sticker_schedule:
-            if st_f <= i < end_f:
-                composite_cutout_sticker(canvas, frames, i, st_f, end_f, sx, sy)
-
-        # CAPS flash (affects all layers)
-        if flash_cnt > 0:
-            canvas = caps_flash(canvas, flash_cnt / 2, accent_bgr)
-            flash_cnt -= 1
-
-        # LAYER 7: Vignette
-        cf = canvas.astype(np.float32) / 255.0 * vignette
-        canvas = (cf * 255).clip(0, 255).astype(np.uint8)
-
-        # LAYER 8: Ken Burns
-        canvas = ken_burns(canvas, i, n_frames)
-
-        # LAYER 9: Film grain
-        canvas = apply_grain(canvas, i)
-
-        # NO SHAKE — clean cinematic finish
-
-        writer.write(canvas)
-        if i % log_step == 0:
-            print(f"  [RENDER] {int(i/n_frames*100)}%"
-                  f"{'  ✨' if is_climax else ''}")
-
-    writer.release()
-    print("[RENDER] Re-encoding...")
-    r = subprocess.run(
-        ["ffmpeg","-y","-i",temp,"-c:v","libx264",
-         "-preset","fast","-crf","17","-pix_fmt","yuv420p","-an",
-         str(OUTPUT_VIDEO)],
-        capture_output=True, text=True)
-    if r.returncode != 0:
-        shutil.copy(temp, str(OUTPUT_VIDEO))
-    else:
-        Path(temp).unlink(missing_ok=True)
-    print(f"[✓] {OUTPUT_VIDEO} "
-          f"({OUTPUT_VIDEO.stat().st_size//1024//1024}MB)")
-
-
-# ══════════════════════════════════════════════════════════════════
-#  ENTRY POINT
-# ══════════════════════════════════════════════════════════════════
-
-def main():
-    print("="*62)
-    print("  Shining Black Minimalist Engine v9")
-    print("  Dominant GIFs · Cutout Stickers · Z-Layered Compositing")
-    print("="*62)
-
-    ensure_font()
-    ASSETS_DIR.mkdir(exist_ok=True)
-
-    if not INPUT_AUDIO.exists():
-        download_audio()
-    if not INPUT_SCRIPT.exists():
-        sys.exit("[ERROR] script.txt not found")
-
-    raw   = INPUT_SCRIPT.read_text(encoding="utf-8")
-    clean = clean_script(raw)
-    print(f"[INFO] Script: {len(clean.split())} words")
-
-    accent_bgr = random.choice(ACCENT_OPTIONS)
-
-    # Audio duration
-    cmd = ["ffprobe","-v","error","-show_entries","format=duration",
-           "-of","default=noprint_wrappers=1:nokey=1",str(INPUT_AUDIO)]
-    duration = float(subprocess.run(
-        cmd,capture_output=True,text=True).stdout.strip())
-    n_frames = int(duration*FPS)
-    print(f"[INFO] Duration: {duration:.2f}s")
-
-    # TTS timestamps FIRST (needed for situational placement)
-    print("[TTS] Computing timestamps...")
-    word_timestamps = asyncio.run(generate_tts_with_timing(clean))
-    if not word_timestamps:
-        words = clean.split()
-        d     = duration/max(1,len(words))
-        word_timestamps = [{"word":w,"start":i*d,"duration":d}
-                           for i,w in enumerate(words)]
-
-    phrases = group_into_phrases(word_timestamps, duration, accent_bgr)
-    
-    # Extract keywords for asset search
-    keywords = extract_keywords(clean, n=MAX_GIF_KEYWORDS + MAX_STICKER_KEYWORDS)
-    print(f"[PIXABAY] Keywords: {keywords}")
-    
-    # Build asset schedules with phrase-aware timing
-    gif_schedule, sticker_schedule = build_asset_schedule(keywords, duration, phrases)
-
-    rms_arr, wave_arr, _ = analyse_audio(str(INPUT_AUDIO), n_frames)
-
-    render_video(phrases, rms_arr, wave_arr, duration,
-                 accent_bgr, gif_schedule, sticker_schedule)
-
-    print("\n"+"="*62)
-    print("  [✓] DONE — raw_video.mp4 ready")
-    print("="*62)
-
-
-if __name__ == "__main__":
-    main()
