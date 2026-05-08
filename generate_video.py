@@ -1,16 +1,12 @@
 """
-generate_video.py — Shining Black Minimalist Engine v10
+generate_video.py — Shining Black Minimalist Engine v11
 =======================================================
-Matrix/Cinematic aesthetic:
-  - Deep black radial gradient background
-  - Dust particle overlay (60-80 particles)
-  - Pixabay GIF + vector sticker assets
-  - Pure white elastic typography
-  - Neon glow filled area waveform
-  - Slow cinematic zoom 1.0→1.1x
-  - NO shake — clean cinematic finish
-  - 150px safe zone enforced everywhere
-  - Headless GitHub Actions compatible
+Changes from v10:
+  - Switched from Pixabay to GIPHY API for viral/trending GIFs & stickers
+  - Assets now appear ONE AT A TIME, timed to specific phrases/words
+  - Each phrase can trigger a relevant GIF/sticker based on its keywords
+  - Uses GIPHY Search + Trending for maximum viral content
+  - GIPHY_API_KEY env var required (replaces PIXABAY_API_KEY)
 Output: raw_video.mp4 (1080×1920, 30fps, no audio)
 """
 
@@ -63,11 +59,11 @@ INPUT_SCRIPT = Path("script.txt")
 INPUT_AUDIO  = Path("output_voice.wav")
 AUDIO_MP3    = Path("output_raw.mp3")
 OUTPUT_VIDEO = Path("raw_video.mp4")
-ASSETS_DIR   = Path("pixabay_assets")
+ASSETS_DIR   = Path("giphy_assets")
 FONT_PATH    = Path("Montserrat-Bold.ttf")
 FONT_URL     = "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-Bold.ttf"
 
-PIXABAY_KEY  = os.environ.get("PIXABAY_API_KEY", "")
+GIPHY_KEY    = os.environ.get("GIPHY_API_KEY", "")
 GH_TOKEN     = os.environ.get("GH_TOKEN", "")
 
 # ══════════════════════════════════════════════════════════════════
@@ -130,18 +126,13 @@ STICKER_ROT_RANGE   = 6
 STICKER_DURATION_SEC = (3.0, 4.0)
 
 # OUTER 20% CORNER POSITIONS ONLY
-# Top/bottom 20% of height, left/right 20% of width
 CORNER_MARGIN_X = int(W * 0.05)      # 5% from edge
 CORNER_MARGIN_Y = int(H * 0.05)
 
 STICKER_POSITIONS = [
-    # Top-left outer corner
     (CORNER_MARGIN_X, CORNER_MARGIN_Y),
-    # Top-right outer corner
     (W - STICKER_SIZE - CORNER_MARGIN_X, CORNER_MARGIN_Y),
-    # Bottom-left outer corner (above waveform safe zone)
     (CORNER_MARGIN_X, H - STICKER_SIZE - CORNER_MARGIN_Y - 100),
-    # Bottom-right outer corner
     (W - STICKER_SIZE - CORNER_MARGIN_X, H - STICKER_SIZE - CORNER_MARGIN_Y - 100),
 ]
 
@@ -156,15 +147,11 @@ GIF_FADE_FRAMES     = int(FPS * 0.15)
 
 # GIFs in outer edges only (not center), behind text
 GIF_EDGE_POSITIONS = [
-    # Left edge, vertically centered
     (int(W * 0.12), int(H * 0.35)),
     (int(W * 0.12), int(H * 0.65)),
-    # Right edge, vertically centered
     (int(W * 0.88), int(H * 0.35)),
     (int(W * 0.88), int(H * 0.65)),
-    # Top edge, horizontally centered
     (int(W * 0.5), int(H * 0.12)),
-    # Bottom edge, above waveform
     (int(W * 0.5), int(H * 0.78)),
 ]
 
@@ -293,104 +280,138 @@ def extract_keywords(text: str, n: int = 8) -> list:
     return sorted_kw[:n]
 
 
+def extract_phrase_keyword(phrase_text: str, global_keywords: list) -> str:
+    """
+    Extract the most relevant keyword from a specific phrase.
+    Returns the best matching keyword for GIPHY search.
+    """
+    stops = {
+        'the','a','an','and','or','but','in','on','at','to','for',
+        'of','with','it','is','was','be','are','were','i','you',
+        'he','she','they','we','my','your','just','that','this',
+        'have','had','from','not','so','then','when','what','about',
+        'like','all','me','us','its','been','would','could','said',
+        'told','thought','knew','felt','got','went','came','never',
+        'every','their','will','can','one','out','into','only','also',
+        'more','most','other','some','time','very','know','take',
+        'than','over','think','back','after','use','two','how','our',
+        'work','first','well','way','even','new','want','because',
+        'any','these','give','day','most','us','get','go','make',
+        'see','look','come','here','there','now','up','down','if',
+        'no','yes','oh','ah','wow','hey','man','guy','girl','boy'
+    }
+    
+    words = re.findall(r'\b[a-z]{3,}\b', phrase_text.lower())
+    phrase_words = [w for w in words if w not in stops and len(w) > 3]
+    
+    # Prioritize words that also appear in global keywords (more relevant to overall topic)
+    for gw in global_keywords:
+        if gw in phrase_text.lower():
+            return gw
+    
+    # Fallback to best phrase word
+    if phrase_words:
+        return phrase_words[0]
+    
+    # Final fallback to random global keyword
+    return random.choice(global_keywords) if global_keywords else "trending"
+
+
 # ══════════════════════════════════════════════════════════════════
-#  PIXABAY API — MINIMALIST SEARCH QUERIES
+#  GIPHY API — VIRAL/TRENDING GIFs & STICKERS
 # ══════════════════════════════════════════════════════════════════
 
-def fetch_pixabay_gif(keyword: str) -> list:
+def fetch_giphy_gif(keyword: str) -> list:
     """
-    Fetch animated GIF from Pixabay using keyword + "minimalist".
-    Returns list of PIL RGBA frames sized for medium display.
+    Fetch viral GIF from GIPHY using keyword search.
+    Returns list of PIL RGBA frames sized for display.
+    Uses 'g' rating for safe content.
     """
-    if not PIXABAY_KEY:
+    if not GIPHY_KEY:
         return []
-    try:
-        # Search with "minimalist" suffix for cleaner results
-        search_query = f"{keyword} minimalist"
-        url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
-               f"&q={requests.utils.quote(search_query)}"
-               f"&image_type=animation"
-               f"&per_page=10&safesearch=true")
-        res  = requests.get(url, timeout=15)
-        data = res.json()
-        hits = data.get("hits", [])
-        
-        # Fallback to illustration with minimalist
-        if not hits:
-            url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
-                   f"&q={requests.utils.quote(search_query)}"
-                   f"&image_type=illustration"
-                   f"&per_page=5&safesearch=true")
+    
+    # Try search first, then trending as fallback
+    endpoints = [
+        # Search endpoint with keyword
+        f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword)}&limit=10&rating=g&lang=en",
+        # Trending fallback
+        f"https://api.giphy.com/v1/gifs/trending?api_key={GIPHY_KEY}&limit=10&rating=g",
+    ]
+    
+    gif_url = None
+    for url in endpoints:
+        try:
             res = requests.get(url, timeout=15)
-            hits = res.json().get("hits", [])
-        
-        if not hits:
-            return []
+            data = res.json()
+            hits = data.get("data", [])
             
-        hit = hits[0]
-        gif_url = hit.get("webformatURL") or hit.get("previewURL", "")
-        if not gif_url:
-            return []
-            
-        r = requests.get(gif_url, timeout=20)
+            if hits:
+                # Pick a random one from top results for variety
+                hit = random.choice(hits[:5])
+                gif_url = hit.get("images", {}).get("original", {}).get("url")
+                if not gif_url:
+                    gif_url = hit.get("images", {}).get("fixed_height", {}).get("url")
+                if gif_url:
+                    print(f"[GIPHY] ✅ GIF found for '{keyword}': {hit.get('title', 'N/A')[:50]}")
+                    break
+        except Exception as e:
+            print(f"[GIPHY] Search failed for '{keyword}': {e}")
+            continue
+    
+    if not gif_url:
+        print(f"[GIPHY] ❌ No GIF found for '{keyword}'")
+        return []
+    
+    try:
+        r = requests.get(gif_url, timeout=30)
         img_bytes = BytesIO(r.content)
         return process_gif_frames(img_bytes, keyword)
     except Exception as e:
-        print(f"[PIXABAY] GIF fetch failed for '{keyword}': {e}")
+        print(f"[GIPHY] Download failed: {e}")
         return []
 
 
-def fetch_pixabay_sticker(keyword: str) -> list:
+def fetch_giphy_sticker(keyword: str) -> list:
     """
-    Fetch transparent PNG sticker/cutout from Pixabay with minimalist query.
+    Fetch transparent sticker from GIPHY.
+    Uses sticker search endpoint for transparent backgrounds.
     """
-    if not PIXABAY_KEY:
+    if not GIPHY_KEY:
         return []
+    
+    url = f"https://api.giphy.com/v1/stickers/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword)}&limit=10&rating=g&lang=en"
+    
     try:
-        # Prioritize minimalist vector searches
-        queries = [
-            f"{keyword} minimalist vector",
-            f"{keyword} minimalist icon",
-            f"{keyword} minimalist sticker",
-            f"{keyword} minimalist cutout",
-        ]
-        
-        for q in queries:
-            url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
-                   f"&q={requests.utils.quote(q)}"
-                   f"&image_type=vector"
-                   f"&per_page=5&safesearch=true")
-            res = requests.get(url, timeout=15)
-            hits = res.json().get("hits", [])
-            
-            if hits:
-                hit = hits[0]
-                img_url = hit.get("webformatURL") or hit.get("previewURL", "")
-                if img_url:
-                    r = requests.get(img_url, timeout=20)
-                    return process_sticker_frames(BytesIO(r.content), keyword)
-                    
-        # Final fallback: any minimalist image
-        url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
-               f"&q={requests.utils.quote(keyword + ' minimalist')}"
-               f"&per_page=5&safesearch=true")
         res = requests.get(url, timeout=15)
-        hits = res.json().get("hits", [])
+        data = res.json()
+        hits = data.get("data", [])
+        
+        if not hits:
+            # Fallback to regular GIFs with transparent preference
+            url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword + ' transparent')}&limit=10&rating=g"
+            res = requests.get(url, timeout=15)
+            hits = res.json().get("data", [])
+        
         if hits:
-            img_url = hits[0].get("webformatURL") or hits[0].get("previewURL", "")
+            hit = random.choice(hits[:5])
+            img_url = hit.get("images", {}).get("original", {}).get("url")
+            if not img_url:
+                img_url = hit.get("images", {}).get("fixed_height", {}).get("url")
+            
             if img_url:
+                print(f"[GIPHY] ✅ Sticker found for '{keyword}': {hit.get('title', 'N/A')[:50]}")
                 r = requests.get(img_url, timeout=20)
                 return process_sticker_frames(BytesIO(r.content), keyword)
                 
     except Exception as e:
-        print(f"[PIXABAY] Sticker fetch failed for '{keyword}': {e}")
+        print(f"[GIPHY] Sticker fetch failed for '{keyword}': {e}")
+    
     return []
 
 
 def process_gif_frames(img_bytes: BytesIO, keyword: str) -> list:
     """
-    Process GIF into RGBA frames sized for EDGE display (not center).
-    Medium size, clean edges, no border for GIFs.
+    Process GIF into RGBA frames sized for EDGE display.
     """
     frames = []
     try:
@@ -411,7 +432,7 @@ def process_gif_frames(img_bytes: BytesIO, keyword: str) -> list:
             frames.append(np.array(fr))
             
         if frames:
-            print(f"[PIXABAY] ✅ GIF '{keyword}': {len(frames)} frames, {target_size}px")
+            print(f"[GIPHY] ✅ Processed '{keyword}': {len(frames)} frames, {target_size}px")
     except Exception as e:
         print(f"[ASSET] GIF process failed: {e}")
     return frames
@@ -420,7 +441,6 @@ def process_gif_frames(img_bytes: BytesIO, keyword: str) -> list:
 def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
     """
     Process sticker into RGBA frames with CUTOUT styling.
-    White border, subtle shadow, edge-appropriate size.
     """
     frames = []
     try:
@@ -431,7 +451,7 @@ def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
         def process_one(fr: Image.Image) -> np.ndarray:
             fr = fr.convert("RGBA").resize((size_in, size_in), Image.LANCZOS)
             
-            # Soft shadow for depth
+            # Soft shadow
             sh_size = STICKER_SIZE + STICKER_SHADOW * 2
             shadow = Image.new("RGBA", (sh_size, sh_size), (0, 0, 0, 0))
             sd_base = Image.new("RGBA", (size_in, size_in), (0, 0, 0, 120))
@@ -440,7 +460,7 @@ def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
                                     STICKER_BORDER + STICKER_SHADOW + 2))
             shadow = shadow.filter(ImageFilter.GaussianBlur(radius=5))
             
-            # White border for cutout sticker look
+            # White border
             bordered = Image.new("RGBA", (STICKER_SIZE, STICKER_SIZE),
                                 (255, 255, 255, 255))
             bordered.alpha_composite(fr, (STICKER_BORDER, STICKER_BORDER))
@@ -461,128 +481,132 @@ def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
             frames.append(process_one(img))
             
         if frames:
-            print(f"[PIXABAY] ✅ Sticker '{keyword}': {len(frames)} frames, rot={rotation:.0f}°")
+            print(f"[GIPHY] ✅ Processed sticker '{keyword}': {len(frames)} frames")
     except Exception as e:
         print(f"[ASSET] Sticker process failed: {e}")
     return frames
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ASSET SCHEDULING — OUTER 20% ONLY, BEHIND TEXT
+#  PHRASE-LOCKED ASSET SCHEDULING — ONE AT A TIME
 # ══════════════════════════════════════════════════════════════════
 
-class AssetScheduler:
+class PhraseLockedAssetScheduler:
     """
-    Schedules GIFs and stickers in OUTER 20% only, behind text layer.
-    Ensures no overlap with center text area.
+    Each phrase gets ONE asset (GIF or sticker) that appears ONLY during that phrase.
+    Assets are timed to phrase start/end and positioned in outer edges/corners.
     """
-    def __init__(self, duration: float):
-        self.duration = duration
-        self.total_frames = int(duration * FPS)
-        self.gifs = []      # [(start, end, frames, x, y, size)]
-        self.stickers = []  # [(start, end, frames, x, y)]
-        self.occupied_zones = []
+    def __init__(self, phrases: list):
+        self.phrases = phrases
+        self.total_frames = int(phrases[-1]["end_sec"] * FPS) if phrases else 0
+        self.assets = []  # [(start_f, end_f, frames, x, y, size, asset_type)]
         
-    def is_zone_free(self, start_f, end_f, x1, y1, x2, y2, buffer=50):
-        """Check if zone is free for given time range."""
-        for (os, oe, ox1, oy1, ox2, oy2) in self.occupied_zones:
-            if not (end_f < os or start_f > oe):
-                if not (x2 + buffer < ox1 or x1 - buffer > ox2 or 
-                        y2 + buffer < oy1 or y1 - buffer > oy2):
+    def schedule_phrase_asset(self, phrase_idx: int, frames: list, asset_type: str = "gif"):
+        """Attach asset to a specific phrase."""
+        if not frames or phrase_idx >= len(self.phrases):
+            return False
+            
+        phrase = self.phrases[phrase_idx]
+        start_f = int(phrase["start_sec"] * FPS)
+        end_f = min(int(phrase["end_sec"] * FPS), self.total_frames)
+        
+        # Extend slightly beyond phrase for smooth transition
+        end_f = min(end_f + int(FPS * 0.5), self.total_frames)
+        start_f = max(0, start_f - int(FPS * 0.2))
+        
+        if asset_type == "gif":
+            # Edge positions
+            positions = GIF_EDGE_POSITIONS.copy()
+            random.shuffle(positions)
+            for (px, py) in positions:
+                size = frames[0].shape[1]
+                # Check if position is free for this time range
+                if self._is_time_free(start_f, end_f, px, py, size):
+                    self.assets.append((start_f, end_f, frames, px, py, size, "gif"))
+                    print(f"[SCHEDULE] Phrase {phrase_idx}: GIF frames {start_f}-{end_f} @ ({px},{py})")
+                    return True
+        else:
+            # Corner positions
+            positions = STICKER_POSITIONS.copy()
+            random.shuffle(positions)
+            for (px, py) in positions:
+                size = frames[0].shape[1]
+                if self._is_time_free(start_f, end_f, px, py, size):
+                    self.assets.append((start_f, end_f, frames, px, py, size, "sticker"))
+                    print(f"[SCHEDULE] Phrase {phrase_idx}: Sticker frames {start_f}-{end_f} @ ({px},{py})")
+                    return True
+        return False
+    
+    def _is_time_free(self, start_f, end_f, px, py, size, buffer=80):
+        """Check if time slot and position is free."""
+        half = size // 2
+        x1, y1 = px - half, py - half
+        x2, y2 = px + half, py + half
+        
+        for (es, ee, _, ex, ey, esize, _) in self.assets:
+            # Time overlap check
+            if not (end_f < es or start_f > ee):
+                # Position overlap check
+                eh = esize // 2
+                ex1, ey1 = ex - eh, ey - eh
+                ex2, ey2 = ex + eh, ey + eh
+                if not (x2 + buffer < ex1 or x1 - buffer > ex2 or 
+                        y2 + buffer < ey1 or y1 - buffer > ey2):
                     return False
         return True
-        
-    def add_zone(self, start_f, end_f, x1, y1, x2, y2):
-        self.occupied_zones.append((start_f, end_f, x1, y1, x2, y2))
-        
-    def schedule_gif(self, frames, keyword_idx):
-        """Schedule GIF at OUTER EDGE position (not center)."""
-        if not frames:
-            return False
-            
-        dur = random.uniform(*GIF_DURATION_SEC)
-        start_f = random.randint(int(FPS * 2), 
-                                max(int(FPS * 2), self.total_frames - int(dur * FPS) - int(FPS * 2)))
-        end_f = min(start_f + int(dur * FPS), self.total_frames)
-        
-        # Only use edge positions (outer 20%)
-        positions = GIF_EDGE_POSITIONS.copy()
-        random.shuffle(positions)
-        
-        for (px, py) in positions:
-            size = frames[0].shape[1]
-            half = size // 2
-            x1, y1 = px - half, py - half
-            x2, y2 = px + half, py + half
-            
-            # Ensure within safe bounds but OUTER area
-            x1 = max(0, x1); y1 = max(0, y1)
-            x2 = min(W, x2); y2 = min(H, y2)
-            
-            if self.is_zone_free(start_f, end_f, x1, y1, x2, y2, buffer=60):
-                self.gifs.append((start_f, end_f, frames, px, py, size))
-                self.add_zone(start_f, end_f, x1, y1, x2, y2)
-                print(f"[SCHEDULE] GIF '{keyword_idx}': frames {start_f}-{end_f} @ ({px},{py}) [EDGE]")
-                return True
-                
-        return False
-        
-    def schedule_sticker(self, frames, keyword_idx):
-        """Schedule sticker in OUTER CORNER only."""
-        if not frames:
-            return False
-            
-        dur = random.uniform(*STICKER_DURATION_SEC)
-        start_f = random.randint(int(FPS * 3), 
-                                max(int(FPS * 3), self.total_frames - int(dur * FPS) - int(FPS * 3)))
-        end_f = min(start_f + int(dur * FPS), self.total_frames)
-        
-        # Only use corner positions (outer 20%)
-        positions = STICKER_POSITIONS.copy()
-        random.shuffle(positions)
-        
-        for (px, py) in positions:
-            size = frames[0].shape[1]
-            x1, y1 = px, py
-            x2, y2 = px + size, py + size
-            
-            if self.is_zone_free(start_f, end_f, x1, y1, x2, y2, buffer=30):
-                self.stickers.append((start_f, end_f, frames, px, py))
-                self.add_zone(start_f, end_f, x1, y1, x2, y2)
-                print(f"[SCHEDULE] Sticker '{keyword_idx}': frames {start_f}-{end_f} @ ({px},{py}) [CORNER]")
-                return True
-                
-        return False
 
 
-def build_asset_schedule(keywords: list, duration: float) -> AssetScheduler:
-    """Build schedule with 4-5 edge GIFs and 2-3 corner stickers."""
-    scheduler = AssetScheduler(duration)
+def build_phrase_locked_schedule(phrases: list, global_keywords: list) -> PhraseLockedAssetScheduler:
+    """
+    Build schedule where each phrase gets ONE relevant asset.
+    Alternates between GIFs and stickers for variety.
+    """
+    scheduler = PhraseLockedAssetScheduler(phrases)
     
-    if not PIXABAY_KEY:
-        print("[PIXABAY] No API key — skipping assets")
+    if not GIPHY_KEY:
+        print("[GIPHY] No API key — skipping assets")
         return scheduler
-        
-    print(f"[PIXABAY] Fetching MINIMALIST assets for: {keywords}")
     
-    # Schedule 4-5 GIFs at edges
-    gif_keywords = keywords[:MAX_GIF_KEYWORDS]
-    for i, kw in enumerate(gif_keywords):
-        frames = fetch_pixabay_gif(kw)
-        if frames:
-            scheduler.schedule_gif(frames, kw)
-            
-    # Schedule 2-3 stickers at corners
-    sticker_keywords = keywords[MAX_GIF_KEYWORDS:MAX_GIF_KEYWORDS + MAX_STICKER_KEYWORDS]
-    while len(sticker_keywords) < MAX_STICKER_KEYWORDS:
-        sticker_keywords.append(random.choice(keywords[:MAX_GIF_KEYWORDS]))
+    print(f"[GIPHY] Building phrase-locked assets for {len(phrases)} phrases")
+    
+    # Select which phrases get assets (not every phrase, spaced out)
+    # Aim for ~40% of phrases to have assets, minimum 3 seconds apart
+    asset_phrases = []
+    last_asset_time = -3.0
+    
+    for i, phrase in enumerate(phrases):
+        if phrase["start_sec"] - last_asset_time >= 3.0:
+            if random.random() < 0.5:  # 50% chance per eligible phrase
+                asset_phrases.append(i)
+                last_asset_time = phrase["start_sec"]
+    
+    print(f"[GIPHY] {len(asset_phrases)} phrases selected for assets")
+    
+    # Assign assets to selected phrases
+    for idx, phrase_idx in enumerate(asset_phrases):
+        phrase = phrases[phrase_idx]
+        keyword = extract_phrase_keyword(phrase["text"], global_keywords)
         
-    for i, kw in enumerate(sticker_keywords):
-        frames = fetch_pixabay_sticker(kw)
-        if frames:
-            scheduler.schedule_sticker(frames, kw)
-            
-    print(f"[SCHEDULE] {len(scheduler.gifs)} GIFs (edge), {len(scheduler.stickers)} stickers (corner)")
+        # Alternate between GIF and sticker
+        if idx % 2 == 0:
+            frames = fetch_giphy_gif(keyword)
+            if frames:
+                scheduler.schedule_phrase_asset(phrase_idx, frames, "gif")
+            else:
+                # Fallback to sticker if GIF fails
+                frames = fetch_giphy_sticker(keyword)
+                if frames:
+                    scheduler.schedule_phrase_asset(phrase_idx, frames, "sticker")
+        else:
+            frames = fetch_giphy_sticker(keyword)
+            if frames:
+                scheduler.schedule_phrase_asset(phrase_idx, frames, "sticker")
+            else:
+                frames = fetch_giphy_gif(keyword)
+                if frames:
+                    scheduler.schedule_phrase_asset(phrase_idx, frames, "gif")
+    
+    print(f"[SCHEDULE] {len(scheduler.assets)} total assets (phrase-locked)")
     return scheduler
 
 
@@ -867,14 +891,11 @@ def group_into_phrases(word_timestamps: list,
         use_acc   = has_caps or (pi in accent_set)
         entrance  = random.choice(entrances)
 
-        # CENTER SAFE ZONE ONLY — avoid outer 20% where GIFs/stickers live
-        # Keep text in middle 60% of frame vertically and horizontally
+        # CENTER SAFE ZONE ONLY
         for _ in range(25):
-            # Central area: 20% to 80% of height, well within safe zone
             ry = random.randint(int(H * 0.22), int(H * 0.62))
             if prev_y is None or abs(ry-prev_y) > 180: break
         prev_y = ry
-        # Center X with padding from edges
         rx = random.randint(int(W * 0.25), int(W * 0.75))
 
         phrases.append({
@@ -975,38 +996,52 @@ def composite_phrase(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE GIF — BEHIND TEXT, AT EDGES
+#  COMPOSITE ASSET — PHRASE-LOCKED (GIF OR STICKER)
 # ══════════════════════════════════════════════════════════════════
 
-def composite_gif(canvas: np.ndarray,
-                  frames: list,
-                  frame_idx: int,
-                  start_frame: int,
-                  end_frame: int,
-                  cx: int,
-                  cy: int,
-                  size: int) -> None:
-    """Composite GIF at edge position, behind text layer."""
+def composite_phrase_asset(canvas: np.ndarray,
+                           frames: list,
+                           frame_idx: int,
+                           start_frame: int,
+                           end_frame: int,
+                           cx: int,
+                           cy: int,
+                           size: int,
+                           asset_type: str) -> None:
+    """
+    Composite a phrase-locked asset (GIF or sticker).
+    Asset only appears during its assigned phrase time window.
+    """
     if not frames or frame_idx < start_frame or frame_idx > end_frame:
         return
         
     since_start = frame_idx - start_frame
     until_end = end_frame - frame_idx
     
-    # Smooth fade
+    # Smooth fade in/out
     alpha = 1.0
-    if since_start < GIF_FADE_FRAMES:
-        alpha = since_start / GIF_FADE_FRAMES
-    elif until_end < GIF_FADE_FRAMES:
-        alpha = until_end / GIF_FADE_FRAMES
+    fade_frames = GIF_FADE_FRAMES if asset_type == "gif" else int(FPS * 0.3)
+    
+    if since_start < fade_frames:
+        alpha = since_start / fade_frames
+    elif until_end < fade_frames:
+        alpha = until_end / fade_frames
     alpha = max(0.0, min(1.0, alpha))
     
-    gif_frame_idx = (since_start // 2) % len(frames)
-    raw = frames[gif_frame_idx]
-    
-    # Subtle pulse
-    pulse = 1.0 + 0.03 * math.sin(since_start * 0.08)
-    disp_size = int(size * pulse)
+    # Animation frame selection
+    if asset_type == "gif":
+        gif_frame_idx = (since_start // 2) % len(frames)
+        raw = frames[gif_frame_idx]
+        # Subtle pulse for GIFs
+        pulse = 1.0 + 0.03 * math.sin(since_start * 0.08)
+        disp_size = int(size * pulse)
+    else:
+        # Sticker: slower animation, floating effect
+        float_y = int(STICKER_FLOAT_AMP * math.sin(since_start * STICKER_FLOAT_SPEED))
+        gif_frame_idx = (since_start // 3) % len(frames)
+        raw = frames[gif_frame_idx]
+        disp_size = size
+        cy = cy + float_y  # Apply floating to Y position
     
     if disp_size != raw.shape[1]:
         disp = cv2.resize(raw, (disp_size, disp_size))
@@ -1014,81 +1049,15 @@ def composite_gif(canvas: np.ndarray,
         disp = raw.copy()
     dh, dw = disp.shape[:2]
     
-    # Edge position (outer 20%)
+    # Center on position
     px = cx - dw // 2
     py = cy - dh // 2
     
-    # Hard clamp to screen edges (not safe zone — edges are intentional)
+    # Hard clamp to screen edges
     px = max(0, min(W - dw, px))
     py = max(0, min(H - dh, py))
     
     # Composite
-    cr = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
-    cp = Image.fromarray(cr).convert("RGBA")
-    si = Image.fromarray(disp)
-    
-    if si.mode != 'RGBA':
-        si = si.convert("RGBA")
-        
-    r, g, b, a = si.split()
-    a = a.point(lambda v: int(v * alpha))
-    si = Image.merge("RGBA", (r, g, b, a))
-    
-    cp.alpha_composite(si, (max(0, px), max(0, py)))
-    np.copyto(canvas, cv2.cvtColor(
-        np.array(cp.convert("RGB")), cv2.COLOR_RGB2BGR))
-
-
-# ══════════════════════════════════════════════════════════════════
-#  COMPOSITE STICKER — BEHIND TEXT, OUTER CORNERS
-# ══════════════════════════════════════════════════════════════════
-
-def composite_sticker(canvas: np.ndarray,
-                      frames: list,
-                      frame_idx: int,
-                      start_frame: int,
-                      end_frame: int,
-                      corner_x: int,
-                      corner_y: int) -> None:
-    """Composite sticker at outer corner, behind text layer."""
-    if not frames or frame_idx < start_frame or frame_idx > end_frame:
-        return
-        
-    since = frame_idx - start_frame
-    until_end = end_frame - frame_idx
-    
-    # Pop-in animation
-    if since < STICKER_ANIM_FRAMES:
-        t = since / STICKER_ANIM_FRAMES
-        scale = max(0.05, elastic_out(t) * 1.1)
-        alpha = min(1.0, t * 4)
-    else:
-        scale = 1.0
-        alpha = 1.0
-        
-    # Fade out
-    if until_end < int(FPS * 0.3):
-        alpha *= (until_end / int(FPS * 0.3))
-    alpha = max(0.0, min(1.0, alpha))
-    
-    # Floating
-    float_y = int(STICKER_FLOAT_AMP * math.sin(since * STICKER_FLOAT_SPEED))
-    
-    gif_i = (since // 3) % len(frames)
-    raw = frames[gif_i]
-    sh, sw = raw.shape[:2]
-    
-    if abs(scale - 1.0) > 0.01:
-        nw, nh = max(1, int(sw * scale)), max(1, int(sh * scale))
-        disp = cv2.resize(raw, (nw, nh))
-    else:
-        disp = raw.copy()
-    dh, dw = disp.shape[:2]
-
-    # Outer corner position (5% margin from screen edge)
-    px = corner_x
-    py = corner_y + float_y
-
     cr = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
     cp = Image.fromarray(cr).convert("RGBA")
     si = Image.fromarray(disp)
@@ -1158,7 +1127,7 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
         sys.exit("[ERROR] VideoWriter failed to open")
 
     print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases")
-    print(f"[RENDER] {len(scheduler.gifs)} GIFs | {len(scheduler.stickers)} stickers")
+    print(f"[RENDER] {len(scheduler.assets)} phrase-locked assets")
 
     for p in phrases:
         p["img"] = render_phrase_image(p["text"], p["use_accent"], LIME_GREEN)
@@ -1182,13 +1151,9 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
         # Dust particles
         draw_particles(canvas, particles)
 
-        # GIFs behind text (edges)
-        for (sf, ef, frames, cx, cy, size) in scheduler.gifs:
-            composite_gif(canvas, frames, i, sf, ef, cx, cy, size)
-
-        # Stickers behind text (corners)
-        for (sf, ef, frames, sx, sy) in scheduler.stickers:
-            composite_sticker(canvas, frames, i, sf, ef, sx, sy)
+        # Phrase-locked assets (behind text)
+        for (sf, ef, frames, cx, cy, size, asset_type) in scheduler.assets:
+            composite_phrase_asset(canvas, frames, i, sf, ef, cx, cy, size, asset_type)
 
         # Waveform
         draw_neon_waveform(canvas, wave_arr[i], rms_arr[i], is_climax)
@@ -1255,8 +1220,8 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
 
 def main():
     print("=" * 62)
-    print("  Shining Black Minimalist Engine v10")
-    print("  Matrix · Dust · Pixabay · Neon Waveform · No Shake")
+    print("  Shining Black Minimalist Engine v11")
+    print("  GIPHY Viral Assets · Phrase-Locked · One at a Time")
     print("=" * 62)
 
     ensure_font()
@@ -1278,9 +1243,9 @@ def main():
     n_frames = int(duration * FPS)
     print(f"[INFO] Duration: {duration:.2f}s")
 
-    keywords  = extract_keywords(clean, n=MAX_GIF_KEYWORDS + MAX_STICKER_KEYWORDS)
-    print(f"[PIXABAY] Keywords: {keywords}")
-    scheduler = build_asset_schedule(keywords, duration)
+    # Extract keywords for context-aware asset matching
+    global_keywords = extract_keywords(clean, n=MAX_GIF_KEYWORDS + MAX_STICKER_KEYWORDS)
+    print(f"[GIPHY] Global keywords: {global_keywords}")
 
     print("[TTS] Computing timestamps...")
     word_timestamps = asyncio.run(generate_tts_with_timing(clean))
@@ -1291,6 +1256,10 @@ def main():
                            for i, w in enumerate(words)]
 
     phrases  = group_into_phrases(word_timestamps, duration, LIME_GREEN)
+    
+    # Build phrase-locked asset schedule (ONE asset per selected phrase)
+    scheduler = build_phrase_locked_schedule(phrases, global_keywords)
+    
     rms_arr, wave_arr, _ = analyse_audio(str(INPUT_AUDIO), n_frames)
 
     render_video(phrases, rms_arr, wave_arr, duration, LIME_GREEN, scheduler)
