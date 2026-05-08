@@ -1,17 +1,23 @@
 """
-generate_video.py — Premium Scrapbook Engine v7
-================================================
-Safe-zone 150px · Radial gradient backgrounds
-Elastic physics · GIF/PNG stickers with rotation
-Filled area waveform · Climax shake + color oscillation
-Paper grain texture · Continuous zoom 1.0→1.15x
-100% headless — GitHub Actions
+generate_video.py — Shining Black Minimalist Engine v8
+=======================================================
+Matrix/Cinematic aesthetic:
+  - Deep black radial gradient background
+  - Dust particle overlay (60-80 particles)
+  - Pixabay GIF + vector sticker assets
+  - Pure white elastic typography
+  - Neon glow filled area waveform
+  - Slow cinematic zoom 1.0→1.1x
+  - NO shake — clean cinematic finish
+  - 150px safe zone enforced everywhere
+  - Headless GitHub Actions compatible
 Output: raw_video.mp4 (1080×1920, 30fps, no audio)
 """
 
 import os, re, sys, glob, math, random, shutil
-import zipfile, asyncio, subprocess, requests
+import zipfile, asyncio, subprocess, requests, urllib.request
 from pathlib import Path
+from io import BytesIO
 
 import numpy as np
 import cv2
@@ -37,22 +43,16 @@ except ImportError:
 
 W, H        = 1080, 1920
 FPS         = 30
-SAFE_PAD    = 150                   # 150px internal margin all sides
+SAFE_PAD    = 150
 SAFE_X1     = SAFE_PAD
 SAFE_X2     = W - SAFE_PAD
 SAFE_Y1     = SAFE_PAD
 SAFE_Y2     = H - SAFE_PAD
-SAFE_W      = SAFE_X2 - SAFE_X1    # 780px usable width
-SAFE_H      = SAFE_Y2 - SAFE_Y1    # 1620px usable height
-
-# Center 60% positioning zone
-POS_X_MIN   = SAFE_X1 + int(SAFE_W * 0.05)
-POS_X_MAX   = SAFE_X2 - int(SAFE_W * 0.05)
-POS_Y_MIN   = SAFE_Y1 + int(SAFE_H * 0.10)
-POS_Y_MAX   = int(H * 0.60)
+SAFE_W      = SAFE_X2 - SAFE_X1        # 780px
+SAFE_H      = SAFE_Y2 - SAFE_Y1        # 1620px
 
 # ══════════════════════════════════════════════════════════════════
-#  PATHS
+#  PATHS & SECRETS
 # ══════════════════════════════════════════════════════════════════
 
 VOICE        = "en-GB-RyanNeural"
@@ -63,124 +63,104 @@ INPUT_SCRIPT = Path("script.txt")
 INPUT_AUDIO  = Path("output_voice.wav")
 AUDIO_MP3    = Path("output_raw.mp3")
 OUTPUT_VIDEO = Path("raw_video.mp4")
-ASSETS_DIR   = Path("assets")
+ASSETS_DIR   = Path("pixabay_assets")
 FONT_PATH    = Path("Montserrat-Bold.ttf")
 FONT_URL     = "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-Bold.ttf"
 
+PIXABAY_KEY  = os.environ.get("PIXABAY_API_KEY", "")
+GH_TOKEN     = os.environ.get("GH_TOKEN", "")
+
 # ══════════════════════════════════════════════════════════════════
-#  COLOUR PALETTE
+#  COLOUR PALETTE — Shining Black
 # ══════════════════════════════════════════════════════════════════
 
-# Radial gradients (center_BGR, edge_BGR)
-PALETTES = [
-    ((185,175,255),(120,105,195)),  # Peach
-    ((193,182,255),(128,112,200)),  # Apricot
-    ((200,180,255),(135,110,200)),  # Creamsicle
-    ((180,160,250),(115, 90,195)),  # Papaya
-    ((190,150,240),(120, 80,185)),  # Guava
-    ((165,140,255),(100, 75,195)),  # Salmon
-    ((155,125,255),(90,  60,195)),  # Coral
-    ((170,120,240),(100, 55,180)),  # Terra Cotta
-    ((200,170,255),(130,100,200)),  # Melon
-    ((210,190,255),(140,120,205)),  # Shell Pink
-    ((185,185,255),(115,115,205)),  # Pink
-    ((130,215,150),(60, 145, 80)),  # Lime
-    ((140,200,255),(70, 130,205)),  # Soft Orange
+BG_CENTER    = (38, 38, 38)         # BGR: Dark Charcoal center
+BG_EDGE      = (5,  5,  5)          # BGR: Pure black edge
+TEXT_WHITE   = (255, 255, 255)      # Primary text
+TEXT_DIM     = (200, 200, 200)      # Secondary text
+
+# Accent options — neon tones that pop on black
+ACCENT_OPTIONS = [
+    (0,   255, 180),   # Neon cyan-green
+    (255, 200,   0),   # Electric yellow
+    (200,  80, 255),   # Neon purple
+    (0,   200, 255),   # Electric blue
+    (80,  255, 120),   # Lime green
+    (255,  80, 160),   # Hot pink
 ]
 
-# Climax oscillation pairs (two warm tones)
-CLIMAX_PAIRS = [
-    (((165,140,255),(100,75,195)), ((155,125,255),(90,60,195))),
-    (((200,180,255),(135,110,200)),((185,175,255),(120,105,195))),
-    (((130,215,150),(60,145,80)), ((140,200,255),(70,130,205))),
-    (((170,120,240),(100,55,180)),((190,150,240),(120,80,185))),
-]
-
-# Text — Dark Espresso / Deep Charcoal
-TEXT_PRIMARY   = (29, 27, 45)    # BGR: Dark Espresso #2D1B1B
-TEXT_SECONDARY = (40, 35, 55)    # BGR: Deep Charcoal
-TEXT_ACCENT_OPTIONS = [
-    (30,  10, 180),   # Deep crimson
-    (10,  50, 200),   # Burnt sienna
-    (50,  20, 160),   # Dark plum
-    (20, 100, 190),   # Rich amber
-    (0,   80, 170),   # Dark gold
-]
-
-# Waveform — tone-on-tone (slightly darker than bg center)
-WAVE_DARKEN = 0.55   # How much darker than bg center
+# Waveform neon glow
+WAVE_ACCENT  = (120, 255, 60)       # Lime green fill
+WAVE_GLOW    = (60,  180, 30)       # Glow layer
 
 # ══════════════════════════════════════════════════════════════════
 #  TYPOGRAPHY
 # ══════════════════════════════════════════════════════════════════
 
-FONT_SIZE_BASE  = 96
-FONT_SIZE_MIN   = 58       # Shrink long lines to fit
-FONT_SIZE_CAPS  = 118
-LINE_SPACING    = 26
+FONT_SIZE_BASE  = 92
+FONT_SIZE_MIN   = 52
+FONT_SIZE_CAPS  = 115
+LINE_SPACING    = 24
 WORDS_PER_PHRASE = 4
 MIN_PHRASE_SEC  = 1.2
-ACCENT_CHANCE   = 0.30
+ACCENT_CHANCE   = 0.25
 
 # ══════════════════════════════════════════════════════════════════
 #  ANIMATION
 # ══════════════════════════════════════════════════════════════════
 
-ANIM_IN  = int(FPS * 0.20)
-ANIM_OUT = int(FPS * 0.15)
-KB_START = 1.0
-KB_END   = 1.15
+ANIM_IN      = int(FPS * 0.20)
+ANIM_OUT     = int(FPS * 0.15)
+KB_START     = 1.0
+KB_END       = 1.10
 
 # ══════════════════════════════════════════════════════════════════
-#  STICKER
+#  DUST PARTICLES
 # ══════════════════════════════════════════════════════════════════
 
-STICKER_SIZE        = 200
+N_PARTICLES  = 70   # 60-80 particles
+
+# ══════════════════════════════════════════════════════════════════
+#  STICKER CONFIG
+# ══════════════════════════════════════════════════════════════════
+
+STICKER_SIZE        = 190
 STICKER_BORDER      = 10
 STICKER_SHADOW      = 8
-STICKER_FLOAT_AMP   = 14
-STICKER_FLOAT_SPEED = 0.07
-STICKER_ANIM_FRAMES = int(FPS * 0.25)
-STICKER_ROT_RANGE   = 15    # ±15 degrees
+STICKER_FLOAT_AMP   = 12
+STICKER_FLOAT_SPEED = 0.06
+STICKER_ANIM_FRAMES = int(FPS * 0.22)
+STICKER_ROT_RANGE   = 12        # ±12 degrees
 
-# Keywords → asset filenames (png or gif)
-STICKER_KEYWORDS = {
-    "shocked": ["shocked.gif","shocked.png"],
-    "fire":    ["fire.gif",   "fire.png"],
-    "cat":     ["cat.gif",    "cat.png"],
-    "aura":    ["aura.gif",   "aura.png"],
-    "win":     ["win.gif",    "win.png"],
-    "love":    ["love.gif",   "love.png"],
-    "brain":   ["brain.gif",  "brain.png"],
-    "star":    ["star.gif",   "star.png"],
-    "ghost":   ["ghost.gif",  "ghost.png"],
-    "crown":   ["crown.gif",  "crown.png"],
-    "money":   ["money.gif",  "money.png"],
-    "rocket":  ["rocket.gif", "rocket.png"],
-    "wow":     ["shocked.gif","shocked.png"],
-    "amazing": ["star.gif",   "star.png"],
-}
+# Pixabay keyword extraction — how many to search
+MAX_GIF_KEYWORDS    = 4
+MAX_VECTOR_KEYWORDS = 3
 
-# Sticker safe corners — well away from text zone
+# Sticker corner positions (well inside safe zone)
 STICKER_CORNERS = [
-    (SAFE_X1 + 10, SAFE_Y1 + 10),
-    (SAFE_X2 - STICKER_SIZE - 10, SAFE_Y1 + 10),
-    (SAFE_X1 + 10, int(H*0.72)),
-    (SAFE_X2 - STICKER_SIZE - 10, int(H*0.72)),
+    (SAFE_X1 + 20, SAFE_Y1 + 20),
+    (SAFE_X2 - STICKER_SIZE - 20, SAFE_Y1 + 20),
+    (SAFE_X1 + 20, int(H*0.73)),
+    (SAFE_X2 - STICKER_SIZE - 20, int(H*0.73)),
+    (int(W*0.5 - STICKER_SIZE//2), SAFE_Y1 + 20),
 ]
+
+# ══════════════════════════════════════════════════════════════════
+#  WAVEFORM
+# ══════════════════════════════════════════════════════════════════
+
+WAVE_Y       = int(H * 0.84)
+WAVE_H_PX    = int(H * 0.12)
+WAVE_POINTS  = 220
 
 # ══════════════════════════════════════════════════════════════════
 #  EFFECTS
 # ══════════════════════════════════════════════════════════════════
 
-GRAIN_STRENGTH  = 0.05
-VIGNETTE_STR    = 0.60
-CLIMAX_SECS     = 5.0
-SHAKE_AMP       = 14
-MOTION_BLUR_PX  = 10
-WAVE_Y          = int(H * 0.82)
-WAVE_H          = int(H * 0.13)
-WAVE_POINTS     = 220
+GRAIN_STRENGTH = 0.025
+VIGNETTE_STR   = 0.65
+CLIMAX_SECS    = 5.0
+MOTION_BLUR_PX = 10
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -194,7 +174,7 @@ def ensure_font():
         r = requests.get(FONT_URL, timeout=30)
         if r.status_code == 200:
             FONT_PATH.write_bytes(r.content)
-            print("[FONT] ✅ Downloaded")
+            print("[FONT] ✅ Montserrat Bold downloaded")
             return
     except Exception as e:
         print(f"[FONT] Download failed: {e}")
@@ -203,7 +183,6 @@ def ensure_font():
     src  = bold[0] if bold else (ttfs[0] if ttfs else None)
     if src:
         shutil.copy(src, str(FONT_PATH))
-        print(f"[FONT] System fallback: {src}")
 
 
 def get_font(size: int) -> ImageFont.FreeTypeFont:
@@ -220,12 +199,11 @@ def get_font(size: int) -> ImageFont.FreeTypeFont:
 # ══════════════════════════════════════════════════════════════════
 
 def download_audio():
-    token = os.environ.get("GH_TOKEN", "")
-    if not token:
+    if not GH_TOKEN:
         if INPUT_AUDIO.exists():
             return
         sys.exit("[ERROR] GH_TOKEN not set")
-    hdrs = {"Authorization": f"Bearer {token}",
+    hdrs = {"Authorization": f"Bearer {GH_TOKEN}",
             "Accept": "application/vnd.github+json"}
     res  = requests.get(
         "https://api.github.com/repos/Suryansh0704/Audio-generator-/actions/artifacts",
@@ -261,6 +239,241 @@ def clean_script(raw: str) -> str:
     return text.strip()
 
 
+def extract_keywords(text: str, n: int = 6) -> list:
+    """Extract top N meaningful keywords from script."""
+    stops = {
+        'the','a','an','and','or','but','in','on','at','to','for',
+        'of','with','it','is','was','be','are','were','i','you',
+        'he','she','they','we','my','your','just','that','this',
+        'have','had','from','not','so','then','when','what','about',
+        'like','all','me','us','its','been','would','could','said',
+        'told','thought','knew','felt','got','went','came','never',
+        'every','their','will','can','one','out','into','only','also'
+    }
+    words = re.findall(r'\b[a-z]{4,}\b', text.lower())
+    freq  = {}
+    for w in words:
+        if w not in stops:
+            freq[w] = freq.get(w, 0) + 1
+    sorted_kw = sorted(freq, key=freq.get, reverse=True)
+    return sorted_kw[:n]
+
+
+# ══════════════════════════════════════════════════════════════════
+#  PIXABAY API
+# ══════════════════════════════════════════════════════════════════
+
+def fetch_pixabay_gif(keyword: str) -> list:
+    """
+    Fetch animated GIF from Pixabay using keyword.
+    Returns list of PIL RGBA frames (pre-processed with border+shadow).
+    """
+    if not PIXABAY_KEY:
+        return []
+    try:
+        url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
+               f"&q={requests.utils.quote(keyword)}"
+               f"&image_type=animation"
+               f"&per_page=5&safesearch=true")
+        res  = requests.get(url, timeout=15)
+        data = res.json()
+        hits = data.get("hits", [])
+        if not hits:
+            return []
+        # Pick the first hit
+        hit     = hits[0]
+        gif_url = hit.get("previewURL") or hit.get("webformatURL","")
+        if not gif_url:
+            return []
+        r = requests.get(gif_url, timeout=20)
+        img_bytes = BytesIO(r.content)
+        return process_asset_frames(img_bytes, keyword, "gif")
+    except Exception as e:
+        print(f"[PIXABAY] GIF fetch failed for '{keyword}': {e}")
+        return []
+
+
+def fetch_pixabay_vector(keyword: str) -> list:
+    """
+    Fetch transparent PNG/vector sticker from Pixabay.
+    Returns list of PIL RGBA frames.
+    """
+    if not PIXABAY_KEY:
+        return []
+    try:
+        url = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
+               f"&q={requests.utils.quote(keyword)}"
+               f"&image_type=vector"
+               f"&per_page=5&safesearch=true")
+        res  = requests.get(url, timeout=15)
+        data = res.json()
+        hits = data.get("hits", [])
+        if not hits:
+            # Fallback: any transparent image
+            url2 = (f"https://pixabay.com/api/?key={PIXABAY_KEY}"
+                    f"&q={requests.utils.quote(keyword)}+sticker"
+                    f"&per_page=5&safesearch=true")
+            res   = requests.get(url2, timeout=15)
+            hits  = res.json().get("hits", [])
+        if not hits:
+            return []
+        hit     = hits[0]
+        img_url = hit.get("previewURL") or hit.get("webformatURL","")
+        if not img_url:
+            return []
+        r = requests.get(img_url, timeout=20)
+        return process_asset_frames(BytesIO(r.content), keyword, "vector")
+    except Exception as e:
+        print(f"[PIXABAY] Vector fetch failed for '{keyword}': {e}")
+        return []
+
+
+def process_asset_frames(img_bytes: BytesIO,
+                          keyword: str,
+                          asset_type: str) -> list:
+    """
+    Process image bytes into list of RGBA numpy arrays.
+    Applies: resize → white border → drop shadow → rotation.
+    """
+    rotation = random.uniform(-STICKER_ROT_RANGE, STICKER_ROT_RANGE)
+    size_in  = STICKER_SIZE - STICKER_BORDER*2
+    frames   = []
+
+    def process_one(fr: Image.Image) -> np.ndarray:
+        fr = fr.convert("RGBA").resize((size_in, size_in), Image.LANCZOS)
+
+        # Shadow layer
+        sh_size = STICKER_SIZE + STICKER_SHADOW*2
+        shadow  = Image.new("RGBA", (sh_size, sh_size), (0,0,0,0))
+        sd_base = Image.new("RGBA", (size_in, size_in), (0,0,0,160))
+        shadow.alpha_composite(sd_base,
+                               (STICKER_BORDER+STICKER_SHADOW+4,
+                                STICKER_BORDER+STICKER_SHADOW+4))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=7))
+
+        # White border
+        bordered = Image.new("RGBA", (STICKER_SIZE, STICKER_SIZE),
+                             (255,255,255,255))
+        bordered.alpha_composite(fr, (STICKER_BORDER, STICKER_BORDER))
+
+        # Composite: shadow + bordered
+        final = shadow.copy()
+        final.alpha_composite(bordered, (0,0))
+
+        # Rotate
+        final = final.rotate(rotation, expand=True,
+                              resample=Image.BICUBIC)
+        return np.array(final)
+
+    try:
+        img = Image.open(img_bytes)
+        if hasattr(img, 'n_frames') and img.n_frames > 1:
+            while True:
+                frames.append(process_one(img.copy()))
+                try:
+                    img.seek(img.tell()+1)
+                except EOFError:
+                    break
+        else:
+            frames.append(process_one(img))
+    except Exception as e:
+        print(f"[ASSET] Process failed: {e}")
+
+    if frames:
+        print(f"[PIXABAY] ✅ '{keyword}' ({asset_type}): "
+              f"{len(frames)} frame(s), rot={rotation:.0f}°")
+    return frames
+
+
+def build_sticker_schedule(keywords: list,
+                            duration: float) -> list:
+    """
+    Fetch 4-5 GIFs and 2-3 vectors from Pixabay.
+    Returns schedule: [(start_frame, frames, corner_x, corner_y)]
+    """
+    if not PIXABAY_KEY:
+        print("[PIXABAY] No API key — skipping assets")
+        return []
+
+    schedule    = []
+    gif_kws     = keywords[:MAX_GIF_KEYWORDS]
+    vector_kws  = keywords[MAX_GIF_KEYWORDS:MAX_GIF_KEYWORDS+MAX_VECTOR_KEYWORDS]
+    used_corners = []
+
+    def pick_corner():
+        avail = [c for c in STICKER_CORNERS if c not in used_corners]
+        if not avail:
+            avail = STICKER_CORNERS
+        c = random.choice(avail)
+        used_corners.append(c)
+        return c
+
+    stagger_base = int(FPS * 2)
+    stagger_gap  = int(FPS * 10)
+
+    # Fetch GIFs
+    for idx, kw in enumerate(gif_kws):
+        frames = fetch_pixabay_gif(kw)
+        if frames:
+            corner = pick_corner()
+            start  = stagger_base + idx * stagger_gap
+            if start < int(duration * FPS):
+                schedule.append((start, frames, corner[0], corner[1]))
+
+    # Fetch Vectors
+    for idx, kw in enumerate(vector_kws):
+        frames = fetch_pixabay_vector(kw)
+        if frames:
+            corner = pick_corner()
+            start  = stagger_base + (len(gif_kws)+idx) * stagger_gap
+            if start < int(duration * FPS):
+                schedule.append((start, frames, corner[0], corner[1]))
+
+    print(f"[PIXABAY] {len(schedule)} assets scheduled")
+    return schedule
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DUST PARTICLES
+# ══════════════════════════════════════════════════════════════════
+
+class Particle:
+    __slots__ = ['x','y','vx','vy','size','alpha']
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.x     = random.uniform(0, W)
+        self.y     = random.uniform(0, H)
+        self.vx    = random.uniform(-0.4, 0.4)
+        self.vy    = random.uniform(-0.3, 0.5)
+        self.size  = random.randint(1, 3)
+        self.alpha = random.randint(20, 90)
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        # Wrap around edges
+        if self.x < 0:   self.x = W
+        if self.x > W:   self.x = 0
+        if self.y < 0:   self.y = H
+        if self.y > H:   self.y = 0
+
+
+def init_particles() -> list:
+    return [Particle() for _ in range(N_PARTICLES)]
+
+
+def draw_particles(canvas: np.ndarray,
+                   particles: list) -> None:
+    for p in particles:
+        px, py = int(p.x), int(p.y)
+        if 0 <= px < W and 0 <= py < H:
+            col = (p.alpha, p.alpha, p.alpha)
+            cv2.circle(canvas, (px, py), p.size, col, -1, cv2.LINE_AA)
+        p.update()
+
+
 # ══════════════════════════════════════════════════════════════════
 #  EDGE-TTS TIMESTAMPS
 # ══════════════════════════════════════════════════════════════════
@@ -275,7 +488,7 @@ async def generate_tts_with_timing(text: str) -> list:
         elif chunk["type"] == "WordBoundary":
             w = chunk["text"].strip()
             if w:
-                words.append({"word": w,
+                words.append({"word":w,
                                "start":    chunk["offset"]/10_000_000,
                                "duration": chunk["duration"]/10_000_000})
     AUDIO_MP3.write_bytes(bytes(audio))
@@ -294,139 +507,177 @@ def analyse_audio(path: str, n_frames: int) -> tuple:
     rms_arr  = np.zeros(n_frames, dtype=np.float32)
     wave_arr = np.zeros((n_frames, WAVE_POINTS), dtype=np.float32)
     for i in range(n_frames):
-        s = int(i*spf); e = min(int(s+spf), len(y))
+        s = int(i*spf); e = min(int(s+spf),len(y))
         c = y[s:e]
         if not len(c): continue
         rms_arr[i] = float(np.sqrt(np.mean(c**2)))
-        if len(c) >= WAVE_POINTS:
-            idx = np.linspace(0,len(c)-1,WAVE_POINTS).astype(int)
-            wave_arr[i] = c[idx]
+        if len(c)>=WAVE_POINTS:
+            idx=np.linspace(0,len(c)-1,WAVE_POINTS).astype(int)
+            wave_arr[i]=c[idx]
         else:
-            wave_arr[i,:len(c)] = c
+            wave_arr[i,:len(c)]=c
     mx = rms_arr.max()
-    if mx > 0: rms_arr /= mx
+    if mx>0: rms_arr/=mx
     print(f"[AUDIO] {duration:.2f}s analysed")
     return rms_arr, wave_arr, duration
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PHRASE RENDERING — SAFE ZONE ENFORCED
+#  BACKGROUND — Shining Black Radial Gradient
+# ══════════════════════════════════════════════════════════════════
+
+def build_black_gradient() -> np.ndarray:
+    xs = np.linspace(-1,1,W); ys = np.linspace(-1,1,H)
+    X,Y  = np.meshgrid(xs,ys)
+    dist = np.clip(np.sqrt(X**2+Y**2)/np.sqrt(2),0,1)
+    bg   = np.zeros((H,W,3),dtype=np.uint8)
+    for c in range(3):
+        bg[:,:,c] = (BG_CENTER[c]*(1-dist)+BG_EDGE[c]*dist).astype(np.uint8)
+    return bg
+
+
+# ══════════════════════════════════════════════════════════════════
+#  NEON GLOW FILLED AREA WAVEFORM
+# ══════════════════════════════════════════════════════════════════
+
+def draw_neon_waveform(canvas: np.ndarray,
+                       wave: np.ndarray,
+                       rms: float,
+                       is_climax: bool) -> None:
+    mul  = 1.6 if is_climax else 1.0
+    amp  = min(WAVE_H_PX*1.6, WAVE_H_PX*(0.10+rms*0.90)*mul)
+    xs   = np.linspace(SAFE_X1, SAFE_X2, WAVE_POINTS).astype(int)
+    kern = np.ones(13)/13   # Smooth kernel for cinematic look
+    ws   = np.convolve(wave, kern, mode='same')
+    ys   = np.clip((WAVE_Y - ws*amp).astype(int), SAFE_Y1, H-SAFE_PAD)
+
+    # Gradient brightness center-to-edge
+    ci   = WAVE_POINTS//2
+
+    # ── Pass 1: wide glow ────────────────────────────────────────
+    pts  = np.array([(int(xs[i]),int(ys[i])) for i in range(WAVE_POINTS)],
+                    dtype=np.int32).reshape(-1,1,2)
+    ov   = canvas.copy()
+    cv2.polylines(ov,[pts],False,WAVE_GLOW,16,cv2.LINE_AA)
+    cv2.addWeighted(ov,0.35,canvas,0.65,0,canvas)
+
+    # ── Pass 2: medium glow ───────────────────────────────────────
+    ov2  = canvas.copy()
+    cv2.polylines(ov2,[pts],False,WAVE_GLOW,8,cv2.LINE_AA)
+    cv2.addWeighted(ov2,0.55,canvas,0.45,0,canvas)
+
+    # ── Pass 3: filled polygon ────────────────────────────────────
+    top_pts  = [(int(xs[i]),int(ys[i])) for i in range(WAVE_POINTS)]
+    base_pts = [(int(xs[i]),WAVE_Y) for i in range(WAVE_POINTS-1,-1,-1)]
+    poly     = np.array(top_pts+base_pts, dtype=np.int32)
+    fill_col = tuple(max(0,int(c*0.45)) for c in WAVE_ACCENT)
+    cv2.fillPoly(canvas,[poly],fill_col)
+
+    # ── Pass 4: bright top edge line ─────────────────────────────
+    for i in range(WAVE_POINTS-1):
+        brt  = max(0.30, 1.0-abs(i-ci)/ci*0.65)
+        col  = tuple(int(c*brt) for c in WAVE_ACCENT)
+        cv2.line(canvas,(int(xs[i]),int(ys[i])),
+                 (int(xs[i+1]),int(ys[i+1])),col,2,cv2.LINE_AA)
+
+    # ── Peak sparkle ─────────────────────────────────────────────
+    pi2 = int(np.argmax(np.abs(ws)))
+    cv2.circle(canvas,(int(xs[pi2]),int(ys[pi2])),5,
+               (255,255,255),-1,cv2.LINE_AA)
+    cv2.circle(canvas,(int(xs[pi2]),int(ys[pi2])),9,
+               WAVE_ACCENT,2,cv2.LINE_AA)
+
+
+# ══════════════════════════════════════════════════════════════════
+#  PHRASE RENDERING — WHITE TEXT ON BLACK
 # ══════════════════════════════════════════════════════════════════
 
 def measure_text(text: str, font: ImageFont.FreeTypeFont) -> tuple:
     tmp  = Image.new("RGBA",(1,1))
     draw = ImageDraw.Draw(tmp)
-    bbox = draw.textbbox((0,0), text, font=font)
+    bbox = draw.textbbox((0,0),text,font=font)
     return bbox[2]-bbox[0], bbox[3]-bbox[1]
 
 
-def fit_font_size(words_line: str, is_cap: bool) -> tuple:
-    """
-    Auto-decrease font size until the line fits within SAFE_W.
-    Returns (font, actual_size).
-    """
+def fit_font_size(word: str, is_cap: bool) -> tuple:
     base = FONT_SIZE_CAPS if is_cap else FONT_SIZE_BASE
     for size in range(base, FONT_SIZE_MIN-1, -4):
-        font = get_font(size)
-        tw, _ = measure_text(words_line, font)
-        if tw <= SAFE_W:
+        font    = get_font(size)
+        tw, _   = measure_text(word, font)
+        if tw <= SAFE_W - 40:
             return font, size
     return get_font(FONT_SIZE_MIN), FONT_SIZE_MIN
 
 
-def wrap_words(words: list, max_width: int) -> list:
-    """
-    Wrap a list of word-dicts into lines that fit max_width.
-    Each word-dict: {text, font, w, h, color, is_acc}
-    Returns list of lines (each line = list of word-dicts).
-    """
+def wrap_words(word_data: list, max_w: int) -> list:
     lines, cur, cw = [], [], 0
     GAP = 16
-    for wd in words:
+    for wd in word_data:
         needed = wd["w"] + (GAP if cur else 0)
-        if cur and cw + needed > max_width:
-            lines.append(cur)
-            cur, cw = [wd], wd["w"]
+        if cur and cw+needed > max_w:
+            lines.append(cur); cur,cw = [wd], wd["w"]
         else:
-            cur.append(wd)
-            cw += needed
-    if cur:
-        lines.append(cur)
+            cur.append(wd); cw += needed
+    if cur: lines.append(cur)
     return lines
 
 
 def render_phrase_image(text: str,
-                        has_caps: bool,
                         use_accent: bool,
-                        text_color: tuple,
-                        accent_color: tuple) -> Image.Image:
+                        accent_col: tuple) -> Image.Image:
     """
-    Render phrase as RGBA PIL image.
-    Auto-wraps and auto-shrinks to fit SAFE_W.
-    Applies neon glow to accent/CAPS words.
+    White text on transparent background.
+    Accent words get neon glow + underline.
+    Safe-zone width enforced with auto-wrap + auto-shrink.
     """
     raw_words = text.split()
     PAD       = 20
     GAP_X     = 16
-    LINE_SP   = LINE_SPACING
-    MAX_W     = SAFE_W - PAD*2
+    MAX_W     = SAFE_W - PAD*2 - 20
 
     word_data = []
     for w in raw_words:
         is_cap = bool(re.search(r'[A-Z]{2,}', w))
         is_acc = is_cap or use_accent
-        color  = accent_color if is_acc else text_color
-
-        # Try to fit individual word
+        color  = accent_col if is_acc else TEXT_WHITE
         font, sz = fit_font_size(w, is_cap)
         tw, th   = measure_text(w, font)
-
         word_data.append({
-            "text":  w,
-            "font":  font,
-            "sz":    sz,
-            "color": color,
-            "w":     tw,
-            "h":     th,
-            "is_acc": is_acc,
-            "is_cap": is_cap,
+            "text":w,"font":font,"sz":sz,"color":color,
+            "w":tw,"h":th,"is_acc":is_acc,"is_cap":is_cap
         })
 
     lines   = wrap_words(word_data, MAX_W)
     lh_list = [max(wd["h"] for wd in l) for l in lines]
-    tot_h   = sum(lh_list) + LINE_SP*(len(lines)-1) + PAD*2
+    tot_h   = sum(lh_list) + LINE_SPACING*(len(lines)-1) + PAD*2
     tot_w   = min(SAFE_W, MAX_W + PAD*2)
 
-    img  = Image.new("RGBA", (max(1,tot_w), max(1,tot_h)), (0,0,0,0))
+    img  = Image.new("RGBA",(max(1,tot_w),max(1,tot_h)),(0,0,0,0))
     draw = ImageDraw.Draw(img)
+    y    = PAD
 
-    y = PAD
     for li, line in enumerate(lines):
-        lw = sum(wd["w"] for wd in line) + GAP_X*(len(line)-1)
-        x  = (tot_w - lw)//2   # center each line
+        lw = sum(wd["w"] for wd in line)+GAP_X*(len(line)-1)
+        x  = (tot_w-lw)//2
         lh = lh_list[li]
-
         for wd in line:
-            rgb = (wd["color"][2], wd["color"][1], wd["color"][0])
-
+            rgb = (wd["color"][2],wd["color"][1],wd["color"][0])
             if wd["is_acc"]:
-                # Neon glow layers
-                glow = tuple(min(255, int(c*1.4)) for c in rgb)
-                for gd, ga in [(8,40),(5,75),(3,110)]:
+                # Neon glow
+                glow = tuple(min(255,int(c*1.35)) for c in rgb)
+                for gd,ga in [(8,35),(5,65),(3,95)]:
                     for dx,dy in [(gd,0),(-gd,0),(0,gd),(0,-gd)]:
-                        draw.text((x+dx, y+dy), wd["text"],
-                                  font=wd["font"], fill=glow+(ga,))
-                draw.line([(x, y+wd["h"]+5),(x+wd["w"], y+wd["h"]+5)],
-                          fill=rgb+(220,), width=3)
+                        draw.text((x+dx,y+dy),wd["text"],
+                                  font=wd["font"],fill=glow+(ga,))
+                draw.line([(x,y+wd["h"]+4),(x+wd["w"],y+wd["h"]+4)],
+                          fill=rgb+(210,),width=3)
             else:
-                # Light shadow (dark on light bg)
-                draw.text((x+2,y+2), wd["text"], font=wd["font"],
-                          fill=(0,0,0,80))
-
-            draw.text((x,y), wd["text"], font=wd["font"], fill=rgb+(255,))
-            x += wd["w"] + GAP_X
-
-        y += lh + LINE_SP
+                # Subtle glow on white text
+                draw.text((x+1,y+1),wd["text"],font=wd["font"],
+                          fill=(255,255,255,50))
+            draw.text((x,y),wd["text"],font=wd["font"],fill=rgb+(255,))
+            x += wd["w"]+GAP_X
+        y += lh+LINE_SPACING
 
     return img
 
@@ -437,18 +688,17 @@ def render_phrase_image(text: str,
 
 def group_into_phrases(word_timestamps: list,
                        duration: float,
-                       accent_color: tuple) -> list:
+                       accent_col: tuple) -> list:
     phrases       = []
     climax_start  = duration - CLIMAX_SECS
-    entrances     = ["fly_left","fly_right","fly_top","fly_bottom",
-                     "fly_left","fly_right"]
+    entrances     = ["fly_left","fly_right","fly_bottom",
+                     "fly_left","fly_right","fly_bottom"]
     n_total       = max(1, len(word_timestamps)//WORDS_PER_PHRASE)
     accent_set    = set(random.sample(
         range(n_total), max(1, int(n_total*ACCENT_CHANCE))
     ))
 
-    prev_y = None
-    i = 0; pi = 0
+    prev_y = None; i = 0; pi = 0
     while i < len(word_timestamps):
         group = word_timestamps[i:i+WORDS_PER_PHRASE]
         text  = ' '.join(w["word"] for w in group)
@@ -457,39 +707,28 @@ def group_into_phrases(word_timestamps: list,
             i += WORDS_PER_PHRASE; pi += 1; continue
 
         start_sec = group[0]["start"]
-        end_sec   = group[-1]["start"] + group[-1]["duration"]
-        if end_sec - start_sec < MIN_PHRASE_SEC:
-            end_sec = start_sec + MIN_PHRASE_SEC
+        end_sec   = group[-1]["start"]+group[-1]["duration"]
+        if end_sec-start_sec < MIN_PHRASE_SEC:
+            end_sec = start_sec+MIN_PHRASE_SEC
 
-        has_caps   = bool(re.search(r'[A-Z]{2,}', text))
-        is_climax  = start_sec >= climax_start
-        use_accent = has_caps or (pi in accent_set)
+        has_caps  = bool(re.search(r'[A-Z]{2,}', text))
+        is_climax = start_sec >= climax_start
+        use_acc   = has_caps or (pi in accent_set)
+        entrance  = random.choice(entrances)
 
-        entrance   = random.choice(entrances)
-
-        # Non-overlapping Y position
-        rand_x = random.randint(POS_X_MIN, POS_X_MAX)
-        for _ in range(10):
-            rand_y = random.randint(POS_Y_MIN, POS_Y_MAX)
-            if prev_y is None or abs(rand_y - prev_y) > 200:
-                break
-        prev_y = rand_y
-
-        text_col   = TEXT_PRIMARY if not use_accent else TEXT_SECONDARY
-        phrase_col = accent_color if use_accent else text_col
+        # Non-overlapping Y
+        for _ in range(12):
+            ry = random.randint(int(H*0.20), int(H*0.60))
+            if prev_y is None or abs(ry-prev_y) > 180: break
+        prev_y = ry
+        rx = random.randint(SAFE_X1+60, SAFE_X2-60)
 
         phrases.append({
-            "text":      clean,
-            "start_sec": start_sec,
-            "end_sec":   end_sec,
-            "has_caps":  has_caps,
-            "is_climax": is_climax,
-            "entrance":  entrance,
-            "rand_x":    rand_x,
-            "rand_y":    rand_y,
-            "text_color": text_col,
-            "accent_color": accent_color,
-            "use_accent": use_accent,
+            "text": clean, "start_sec": start_sec,
+            "end_sec": end_sec, "has_caps": has_caps,
+            "is_climax": is_climax, "entrance": entrance,
+            "rand_x": rx, "rand_y": ry,
+            "use_accent": use_acc,
         })
         i += WORDS_PER_PHRASE; pi += 1
 
@@ -504,9 +743,9 @@ def group_into_phrases(word_timestamps: list,
 # ══════════════════════════════════════════════════════════════════
 
 def elastic_out(t: float) -> float:
-    if t <= 0: return 0.0
-    if t >= 1: return 1.0
-    return 1 + (2**(-10*t)) * math.sin((t-0.075)*2*math.pi/0.3)
+    if t<=0: return 0.0
+    if t>=1: return 1.0
+    return 1+(2**(-10*t))*math.sin((t-0.075)*2*math.pi/0.3)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -528,7 +767,7 @@ def motion_blur(img: Image.Image, entrance: str, t: float) -> Image.Image:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE PHRASE — safe zone enforced
+#  COMPOSITE PHRASE
 # ══════════════════════════════════════════════════════════════════
 
 def composite_phrase(canvas: np.ndarray,
@@ -539,45 +778,39 @@ def composite_phrase(canvas: np.ndarray,
                      alpha_override: float = None,
                      blur: bool = False) -> None:
     iw, ih = img.size
-
     if frame_in < ANIM_IN:
         t     = frame_in/ANIM_IN
         e     = elastic_out(t)
-        scale = max(0.1, 0.5 + e*0.6)   # 0.5→1.1→1.0
+        scale = max(0.1, 0.5+e*0.6)
         alpha = min(1.0, t*3.5)
         offsets = {
-            "fly_left":   (int((1-t)*(-iw-80)), 0),
-            "fly_right":  (int((1-t)*(W+80)), 0),
-            "fly_top":    (0, int((1-t)*(-ih-80))),
-            "fly_bottom": (0, int((1-t)*(H+80))),
+            "fly_left":   (int((1-t)*(-iw-80)),0),
+            "fly_right":  (int((1-t)*(W+80)),0),
+            "fly_top":    (0,int((1-t)*(-ih-80))),
+            "fly_bottom": (0,int((1-t)*(H+80))),
         }
-        xo, yo = offsets.get(entrance,(0,0))
-        img = motion_blur(img, entrance, t)
+        xo,yo = offsets.get(entrance,(0,0))
+        img   = motion_blur(img, entrance, t)
     elif frame_out < ANIM_OUT:
-        scale,alpha,xo,yo = 1.0, frame_out/ANIM_OUT, 0, 0
+        scale,alpha,xo,yo = 1.0,frame_out/ANIM_OUT,0,0
     else:
-        scale,alpha,xo,yo = 1.0, 1.0, 0, 0
+        scale,alpha,xo,yo = 1.0,1.0,0,0
 
     if alpha_override is not None:
         alpha = alpha_override
     if blur:
-        img = img.filter(ImageFilter.GaussianBlur(radius=6))
+        img = img.filter(ImageFilter.GaussianBlur(radius=5))
 
-    # Scale
     disp = img
-    if abs(scale-1.0) > 0.01:
-        nw,nh = max(1,int(iw*scale)), max(1,int(ih*scale))
-        disp  = img.resize((nw,nh), Image.LANCZOS)
+    if abs(scale-1.0)>0.01:
+        nw,nh = max(1,int(iw*scale)),max(1,int(ih*scale))
+        disp  = img.resize((nw,nh),Image.LANCZOS)
 
-    # Position — center of disp at (cx+xo, cy+yo)
-    px = cx - disp.width//2 + xo
-    py = cy - disp.height//2 + yo
+    # Safe-zone clamped position
+    px = max(SAFE_X1, min(SAFE_X2-disp.width,  cx-disp.width//2+xo))
+    py = max(SAFE_Y1, min(SAFE_Y2-disp.height, cy-disp.height//2+yo))
 
-    # HARD CLAMP to safe zone
-    px = max(SAFE_X1, min(SAFE_X2-disp.width,  px))
-    py = max(SAFE_Y1, min(SAFE_Y2-disp.height, py))
-
-    cr = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+    cr = cv2.cvtColor(canvas,cv2.COLOR_BGR2RGB)
     cp = Image.fromarray(cr).convert("RGBA")
     r,g,b,a = disp.split()
     a = a.point(lambda v: int(v*max(0.0,min(1.0,alpha))))
@@ -588,74 +821,8 @@ def composite_phrase(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  STICKER ENGINE
+#  COMPOSITE STICKER
 # ══════════════════════════════════════════════════════════════════
-
-def find_asset(keyword: str) -> Path | None:
-    for fname in STICKER_KEYWORDS.get(keyword.lower(), []):
-        p = ASSETS_DIR / fname
-        if p.exists():
-            return p
-    return None
-
-
-def scan_keywords(text: str) -> list:
-    found = []
-    lower = text.lower()
-    for kw in STICKER_KEYWORDS:
-        if kw in lower:
-            p = find_asset(kw)
-            if p:
-                found.append((kw, p))
-    return found[:2]
-
-
-def load_asset_frames(path: Path, rotation: float) -> list:
-    """
-    Load PNG or GIF, apply white border + drop shadow + rotation.
-    Returns list of RGBA numpy arrays (pre-baked).
-    """
-    frames = []
-    size_inner = STICKER_SIZE - STICKER_BORDER*2
-
-    def process_frame(fr: Image.Image) -> np.ndarray:
-        fr    = fr.convert("RGBA").resize(
-            (size_inner,size_inner), Image.LANCZOS)
-        # Drop shadow
-        shadow_size = STICKER_SIZE + STICKER_SHADOW*2
-        shadow_img  = Image.new("RGBA",(shadow_size,shadow_size),(0,0,0,0))
-        shadow_base = Image.new("RGBA",(size_inner,size_inner),(0,0,0,180))
-        shadow_img.alpha_composite(shadow_base,
-                                    (STICKER_BORDER+STICKER_SHADOW+3,
-                                     STICKER_BORDER+STICKER_SHADOW+3))
-        shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(radius=6))
-        # White border frame
-        bordered = Image.new("RGBA",(STICKER_SIZE,STICKER_SIZE),(255,255,255,255))
-        bordered.alpha_composite(fr,(STICKER_BORDER,STICKER_BORDER))
-        # Compose: shadow then bordered
-        final = shadow_img.copy()
-        final.alpha_composite(bordered,(0,0))
-        # Rotate for scrapbook feel
-        final = final.rotate(rotation, expand=True, resample=Image.BICUBIC)
-        return np.array(final)
-
-    try:
-        asset = Image.open(str(path))
-        if hasattr(asset,'n_frames') and asset.n_frames > 1:
-            while True:
-                frames.append(process_frame(asset.copy()))
-                try:
-                    asset.seek(asset.tell()+1)
-                except EOFError:
-                    break
-        else:
-            frames.append(process_frame(asset))
-    except Exception as e:
-        print(f"[STICKER] Load failed {path}: {e}")
-
-    print(f"[STICKER] {path.name} — {len(frames)} frame(s), rot={rotation:.0f}°")
-    return frames
-
 
 def composite_sticker(canvas: np.ndarray,
                       frames: list,
@@ -663,39 +830,33 @@ def composite_sticker(canvas: np.ndarray,
                       start_frame: int,
                       corner_x: int,
                       corner_y: int) -> None:
-    if not frames:
-        return
-    since = frame_idx - start_frame
-    # GIF frame cycling
-    gif_i = (since//2) % len(frames)
-    raw   = frames[gif_i]
+    if not frames: return
+    since  = frame_idx - start_frame
+    gif_i  = (since//2) % len(frames)
+    raw    = frames[gif_i]
 
-    # Elastic entrance scale
     if since < STICKER_ANIM_FRAMES:
         t     = since/STICKER_ANIM_FRAMES
-        e     = elastic_out(t)
-        scale = max(0.05, e*1.1)    # 0→1.1→1.0
+        scale = max(0.05, elastic_out(t)*1.1)
         alpha = min(1.0, t*4)
     else:
-        scale = 1.0
-        alpha = 1.0
+        scale = 1.0; alpha = 1.0
 
-    # Y-axis float (sine)
     float_y = int(STICKER_FLOAT_AMP*math.sin(since*STICKER_FLOAT_SPEED))
 
-    sh, sw = raw.shape[:2]
-    if abs(scale-1.0) > 0.01:
-        nw,nh = max(1,int(sw*scale)), max(1,int(sh*scale))
+    sh,sw = raw.shape[:2]
+    if abs(scale-1.0)>0.01:
+        nw,nh = max(1,int(sw*scale)),max(1,int(sh*scale))
         disp  = cv2.resize(raw,(nw,nh))
     else:
-        disp  = raw
+        disp = raw
     dh,dw = disp.shape[:2]
 
-    # Position — clamp to safe zone
+    # Clamp to safe zone
     px = max(SAFE_X1, min(SAFE_X2-dw, corner_x))
     py = max(SAFE_Y1, min(SAFE_Y2-dh, corner_y+float_y))
 
-    cr = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+    cr = cv2.cvtColor(canvas,cv2.COLOR_BGR2RGB)
     cp = Image.fromarray(cr).convert("RGBA")
     si = Image.fromarray(disp)
     r,g,b,a = si.split()
@@ -707,32 +868,7 @@ def composite_sticker(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  RADIAL GRADIENT BACKGROUND
-# ══════════════════════════════════════════════════════════════════
-
-def build_gradient(center_bgr: tuple, edge_bgr: tuple) -> np.ndarray:
-    xs = np.linspace(-1,1,W); ys = np.linspace(-1,1,H)
-    X,Y  = np.meshgrid(xs,ys)
-    dist = np.clip(np.sqrt(X**2+Y**2)/np.sqrt(2),0,1)
-    bg   = np.zeros((H,W,3),dtype=np.uint8)
-    for c in range(3):
-        bg[:,:,c] = (center_bgr[c]*(1-dist)+edge_bgr[c]*dist).astype(np.uint8)
-    return bg
-
-
-# ══════════════════════════════════════════════════════════════════
-#  PAPER GRAIN TEXTURE
-# ══════════════════════════════════════════════════════════════════
-
-def apply_grain(canvas: np.ndarray, frame_idx: int) -> np.ndarray:
-    rng   = np.random.RandomState(frame_idx*17+3)
-    noise = rng.randint(-20,21,(H,W,3),dtype=np.int16)
-    out   = canvas.astype(np.int16)+(noise*GRAIN_STRENGTH).astype(np.int16)
-    return np.clip(out,0,255).astype(np.uint8)
-
-
-# ══════════════════════════════════════════════════════════════════
-#  VIGNETTE
+#  ATMOSPHERIC LAYERS
 # ══════════════════════════════════════════════════════════════════
 
 def build_vignette() -> np.ndarray:
@@ -743,72 +879,27 @@ def build_vignette() -> np.ndarray:
     return mask.reshape(H,W,1).astype(np.float32)
 
 
-# ══════════════════════════════════════════════════════════════════
-#  FILLED AREA WAVEFORM (tone-on-tone)
-# ══════════════════════════════════════════════════════════════════
+def apply_grain(canvas: np.ndarray, frame_idx: int) -> np.ndarray:
+    rng   = np.random.RandomState(frame_idx*17+3)
+    noise = rng.randint(-15,16,(H,W,3),dtype=np.int16)
+    out   = canvas.astype(np.int16)+(noise*GRAIN_STRENGTH).astype(np.int16)
+    return np.clip(out,0,255).astype(np.uint8)
 
-def draw_filled_waveform(canvas: np.ndarray,
-                         wave: np.ndarray,
-                         rms: float,
-                         bg_center: tuple,
-                         is_climax: bool) -> None:
-    mul  = 2.0 if is_climax else 1.0
-    amp  = min(WAVE_H*1.8, WAVE_H*(0.12+rms*0.88)*mul)
-    xs   = np.linspace(SAFE_X1, SAFE_X2, WAVE_POINTS).astype(int)
-    kern = np.ones(11)/11
-    ws   = np.convolve(wave, kern, mode='same')
-    ys   = np.clip((WAVE_Y-ws*amp).astype(int), 10, H-10)
-
-    # Tone-on-tone: slightly darker than background center
-    wc = tuple(max(0, int(c*WAVE_DARKEN)) for c in bg_center)
-
-    # Filled polygon: wave top + baseline bottom
-    pts_top  = [(int(xs[i]),int(ys[i])) for i in range(WAVE_POINTS)]
-    pts_base = [(int(xs[i]), WAVE_Y)    for i in range(WAVE_POINTS-1,-1,-1)]
-    polygon  = np.array(pts_top + pts_base, dtype=np.int32)
-    cv2.fillPoly(canvas, [polygon], wc)
-
-    # Thin bright edge line on top
-    edge_col = tuple(max(0,int(c*0.80)) for c in bg_center)
-    pts_line = np.array(pts_top, dtype=np.int32).reshape(-1,1,2)
-    cv2.polylines(canvas,[pts_line],False,edge_col,2,cv2.LINE_AA)
-
-
-# ══════════════════════════════════════════════════════════════════
-#  KEN BURNS
-# ══════════════════════════════════════════════════════════════════
 
 def ken_burns(frame: np.ndarray, idx: int, total: int) -> np.ndarray:
     t  = idx/max(1,total-1)
-    s  = KB_START + t*(KB_END-KB_START)
+    s  = KB_START+t*(KB_END-KB_START)
     if abs(s-1.0)<0.002: return frame
     nw,nh = int(W*s),int(H*s)
     big   = cv2.resize(frame,(nw,nh))
     ox,oy = (nw-W)//2,(nh-H)//2
-    return big[oy:oy+H, ox:ox+W]
+    return big[oy:oy+H,ox:ox+W]
 
 
-# ══════════════════════════════════════════════════════════════════
-#  CLIMAX SHAKE
-# ══════════════════════════════════════════════════════════════════
-
-def climax_shake(canvas: np.ndarray, frame_idx: int) -> np.ndarray:
-    rng = np.random.RandomState(frame_idx*7+11)
-    sx  = int(rng.randint(-SHAKE_AMP, SHAKE_AMP+1))
-    sy  = int(rng.randint(-SHAKE_AMP//2, SHAKE_AMP//2+1))
-    M   = np.float32([[1,0,sx],[0,1,sy]])
-    return cv2.warpAffine(canvas,M,(W,H),borderMode=cv2.BORDER_REPLICATE)
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CAPS FLASH
-# ══════════════════════════════════════════════════════════════════
-
-def apply_caps_flash(canvas: np.ndarray,
-                     intensity: float,
-                     accent: tuple) -> np.ndarray:
+def caps_flash(canvas: np.ndarray,
+               intensity: float, accent: tuple) -> np.ndarray:
     ov = np.full_like(canvas, accent, dtype=np.uint8)
-    return cv2.addWeighted(canvas,1-intensity*0.12,ov,intensity*0.12,0)
+    return cv2.addWeighted(canvas,1-intensity*0.10,ov,intensity*0.10,0)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -819,19 +910,14 @@ def render_video(phrases: list,
                  rms_arr: np.ndarray,
                  wave_arr: np.ndarray,
                  duration: float,
-                 palette: tuple,
-                 climax_pair: tuple,
                  accent_bgr: tuple,
                  sticker_schedule: list) -> None:
 
     n_frames     = len(rms_arr)
     vignette     = build_vignette()
+    bg_base      = build_black_gradient()
+    particles    = init_particles()
     climax_start = int((duration-CLIMAX_SECS)*FPS)
-
-    # Pre-build backgrounds
-    bg_main = build_gradient(palette[0], palette[1])
-    bg_c1   = build_gradient(climax_pair[0][0], climax_pair[0][1])
-    bg_c2   = build_gradient(climax_pair[1][0], climax_pair[1][1])
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     temp   = "raw_temp.mp4"
@@ -840,14 +926,12 @@ def render_video(phrases: list,
         sys.exit("[ERROR] VideoWriter failed")
 
     print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases | "
-          f"{len(sticker_schedule)} stickers")
+          f"{len(sticker_schedule)} sticker(s)")
 
     # Pre-render phrase images
     for p in phrases:
         p["img"] = render_phrase_image(
-            p["text"], p["has_caps"], p["use_accent"],
-            p["text_color"], p["accent_color"]
-        )
+            p["text"], p["use_accent"], accent_bgr)
         p["sf"] = int(p["start_sec"]*FPS)
         p["ef"] = min(int(p["end_sec"]*FPS), n_frames)
 
@@ -859,39 +943,33 @@ def render_video(phrases: list,
 
     flash_cnt   = 0
     prev_phrase = None
-    log_step    = max(1,n_frames//20)
+    log_step    = max(1, n_frames//20)
 
     for i in range(n_frames):
         is_climax = i >= climax_start
 
-        # Background — climax oscillates between two tones
-        if is_climax:
-            phase  = (i-climax_start)//5
-            canvas = (bg_c1 if phase%2==0 else bg_c2).copy()
-            bg_ctr = climax_pair[0][0] if phase%2==0 else climax_pair[1][0]
-        else:
-            canvas = bg_main.copy()
-            bg_ctr = palette[0]
+        # Shining black background
+        canvas = bg_base.copy()
 
-        # Filled area waveform
-        draw_filled_waveform(canvas, wave_arr[i], rms_arr[i],
-                             bg_ctr, is_climax)
+        # Dust particles
+        draw_particles(canvas, particles)
+
+        # Neon waveform
+        draw_neon_waveform(canvas, wave_arr[i], rms_arr[i], is_climax)
 
         cur = frame_phrase.get(i)
 
-        # Previous phrase — 20% opacity + blur
+        # Previous phrase at 20% + blur (persistence)
         if (prev_phrase is not None and cur is not None
                 and cur["pi"] != prev_phrase["pi"]):
-            since_end = i - prev_phrase["ef"]
-            if since_end < int(FPS*0.4):
-                la = 0.20*(1-since_end/int(FPS*0.4))
-                composite_phrase(
-                    canvas, prev_phrase["img"],
-                    prev_phrase["ef"]-prev_phrase["sf"], 999,
-                    prev_phrase["entrance"],
-                    prev_phrase["rand_x"], prev_phrase["rand_y"],
-                    alpha_override=la, blur=True
-                )
+            since_end = i-prev_phrase["ef"]
+            if since_end < int(FPS*0.35):
+                la = 0.20*(1-since_end/int(FPS*0.35))
+                composite_phrase(canvas, prev_phrase["img"],
+                                 prev_phrase["ef"]-prev_phrase["sf"],999,
+                                 prev_phrase["entrance"],
+                                 prev_phrase["rand_x"],prev_phrase["rand_y"],
+                                 alpha_override=la, blur=True)
 
         # Active phrase
         if cur is not None:
@@ -904,15 +982,14 @@ def render_video(phrases: list,
                              cur["rand_x"], cur["rand_y"])
             prev_phrase = cur
 
-        # Stickers
+        # Sticker overlays
         for (st_start, st_frames, sx, sy) in sticker_schedule:
             if i >= st_start:
-                composite_sticker(canvas, st_frames,
-                                  i, st_start, sx, sy)
+                composite_sticker(canvas, st_frames, i, st_start, sx, sy)
 
         # CAPS flash
         if flash_cnt > 0:
-            canvas = apply_caps_flash(canvas, flash_cnt/2, accent_bgr)
+            canvas = caps_flash(canvas, flash_cnt/2, accent_bgr)
             flash_cnt -= 1
 
         # Vignette
@@ -922,17 +999,15 @@ def render_video(phrases: list,
         # Ken Burns
         canvas = ken_burns(canvas, i, n_frames)
 
-        # Paper grain
+        # Film grain
         canvas = apply_grain(canvas, i)
 
-        # Climax shake
-        if is_climax:
-            canvas = climax_shake(canvas, i)
+        # NO SHAKE — clean cinematic finish
 
         writer.write(canvas)
         if i % log_step == 0:
             print(f"  [RENDER] {int(i/n_frames*100)}%"
-                  f"{'  🔥' if is_climax else ''}")
+                  f"{'  ✨' if is_climax else ''}")
 
     writer.release()
     print("[RENDER] Re-encoding...")
@@ -941,7 +1016,7 @@ def render_video(phrases: list,
          "-preset","fast","-crf","17","-pix_fmt","yuv420p","-an",
          str(OUTPUT_VIDEO)],
         capture_output=True, text=True)
-    if r.returncode!=0:
+    if r.returncode != 0:
         shutil.copy(temp, str(OUTPUT_VIDEO))
     else:
         Path(temp).unlink(missing_ok=True)
@@ -955,8 +1030,8 @@ def render_video(phrases: list,
 
 def main():
     print("="*62)
-    print("  Premium Scrapbook Engine v7")
-    print("  Safe-Zone · Stickers · Radial Gradient · Elastic")
+    print("  Shining Black Minimalist Engine v8")
+    print("  Matrix · Dust Particles · Pixabay · Neon Waveform")
     print("="*62)
 
     ensure_font()
@@ -971,36 +1046,20 @@ def main():
     clean = clean_script(raw)
     print(f"[INFO] Script: {len(clean.split())} words")
 
-    # Palette
-    palette     = random.choice(PALETTES)
-    climax_pair = random.choice(CLIMAX_PAIRS)
-    accent_bgr  = random.choice(TEXT_ACCENT_OPTIONS)
+    accent_bgr = random.choice(ACCENT_OPTIONS)
 
-    # Duration
-    cmd      = ["ffprobe","-v","error","-show_entries","format=duration",
-                "-of","default=noprint_wrappers=1:nokey=1",str(INPUT_AUDIO)]
-    duration = float(subprocess.run(cmd,capture_output=True,
-                                    text=True).stdout.strip())
+    # Audio duration
+    cmd = ["ffprobe","-v","error","-show_entries","format=duration",
+           "-of","default=noprint_wrappers=1:nokey=1",str(INPUT_AUDIO)]
+    duration = float(subprocess.run(
+        cmd,capture_output=True,text=True).stdout.strip())
     n_frames = int(duration*FPS)
-    print(f"[INFO] Duration: {duration:.2f}s | BG: {palette[0]}")
+    print(f"[INFO] Duration: {duration:.2f}s")
 
-    # Stickers
-    kw_matches = scan_keywords(clean)
-    sticker_schedule = []
-    used_corners     = set()
-    for idx,(kw,path) in enumerate(kw_matches):
-        avail  = [c for c in range(len(STICKER_CORNERS)) if c not in used_corners]
-        if not avail: break
-        ci     = random.choice(avail)
-        used_corners.add(ci)
-        rot    = random.uniform(-STICKER_ROT_RANGE, STICKER_ROT_RANGE)
-        frames = load_asset_frames(path, rot)
-        if frames:
-            sx,sy = STICKER_CORNERS[ci]
-            st    = FPS*3 + idx*FPS*12
-            sticker_schedule.append((st, frames, sx, sy))
-    if not sticker_schedule:
-        print("[STICKER] No matching assets — skipping")
+    # Pixabay assets
+    keywords = extract_keywords(clean, n=MAX_GIF_KEYWORDS+MAX_VECTOR_KEYWORDS)
+    print(f"[PIXABAY] Keywords: {keywords}")
+    sticker_schedule = build_sticker_schedule(keywords, duration)
 
     # TTS timestamps
     print("[TTS] Computing timestamps...")
@@ -1015,7 +1074,7 @@ def main():
     rms_arr, wave_arr, _ = analyse_audio(str(INPUT_AUDIO), n_frames)
 
     render_video(phrases, rms_arr, wave_arr, duration,
-                 palette, climax_pair, accent_bgr, sticker_schedule)
+                 accent_bgr, sticker_schedule)
 
     print("\n"+"="*62)
     print("  [✓] DONE — raw_video.mp4 ready")
