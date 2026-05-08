@@ -137,4 +137,4 @@ jobs:
           echo "## 🎨 Kinetic Typography Video" >> $GITHUB_STEP_SUMMARY
           echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
           echo "| Engine | OpenCV + PIL + Librosa + Edge-TTS + GIPHY |" >> $GITHUB_STEP_SUMMARY
-          echo "| Style | Phrase-Locked Viral Assets |" >> $GITHUB_STEP_SUMMARY
+          echo "| Assets | 5 GIFs + 4 Stickers (Phrase-Locked) |" >> $GITHUB_STEP_SUMMARY
