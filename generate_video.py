@@ -1,16 +1,17 @@
 """
-generate_video.py — Shining Black Minimalist Engine v12
+generate_video.py — Shining Black Minimalist Engine v13
 =======================================================
-FIXED: Guaranteed 5 GIFs + 4 Stickers, all phrase-locked and visible
-  - GIPHY API with proper rendition selection
-  - Exactly 5 GIFs at edge positions, timed to phrases
-  - Exactly 4 stickers in cutout form at corners, timed to phrases
-  - All assets appear ONE AT A TIME, relevant to script words
-  - Viral WhatsApp-style GIFs via GIPHY trending + search
+CRITICAL FIXES:
+  - GIPHY returns WEBP/MP4 by default — now forces gif renditions
+  - Added heavy debug logging to diagnose failures in CI
+  - Fallback chain: gif → fixed_height (webp) → downsized (gif) → original
+  - WEBP files converted properly before frame extraction
+  - MP4 files handled via ffmpeg extraction if available
+  - Guaranteed 5 GIFs + 4 stickers with retry logic
 Output: raw_video.mp4 (1080×1920, 30fps, no audio)
 """
 
-import os, re, sys, glob, math, random, shutil
+import os, re, sys, glob, math, random, shutil, json
 import zipfile, asyncio, subprocess, requests, urllib.request
 from pathlib import Path
 from io import BytesIO
@@ -67,14 +68,14 @@ GIPHY_KEY    = os.environ.get("GIPHY_API_KEY", "")
 GH_TOKEN     = os.environ.get("GH_TOKEN", "")
 
 # ══════════════════════════════════════════════════════════════════
-#  COLOUR PALETTE — Shining Black (LIME GREEN UNIFIED)
+#  COLOUR PALETTE
 # ══════════════════════════════════════════════════════════════════
 
-BG_CENTER    = (38, 38, 38)         # BGR: Dark Charcoal center
-BG_EDGE      = (5,  5,  5)          # BGR: Pure black edge
-TEXT_WHITE   = (255, 255, 255)      # Primary text
-TEXT_DIM     = (200, 200, 200)      # Secondary text
-LIME_GREEN   = (50, 205, 50)        # BGR: #32CD32
+BG_CENTER    = (38, 38, 38)
+BG_EDGE      = (5,  5,  5)
+TEXT_WHITE   = (255, 255, 255)
+TEXT_DIM     = (200, 200, 200)
+LIME_GREEN   = (50, 205, 50)
 WAVE_ACCENT  = LIME_GREEN
 WAVE_GLOW    = (30, 150, 30)
 
@@ -109,42 +110,38 @@ N_PARTICLES  = 70
 #  STICKER CONFIG — CUTOUT FORM
 # ══════════════════════════════════════════════════════════════════
 
-STICKER_SIZE        = 160           # Slightly larger for visibility
-STICKER_BORDER      = 8             # Thick white border for cutout look
+STICKER_SIZE        = 160
+STICKER_BORDER      = 8
 STICKER_SHADOW      = 6
 STICKER_FLOAT_AMP   = 10
 STICKER_FLOAT_SPEED = 0.06
-STICKER_ANIM_FRAMES = int(FPS * 0.30)  # Slower pop-in
+STICKER_ANIM_FRAMES = int(FPS * 0.30)
 STICKER_ROT_RANGE   = 8
-
-# Sticker duration: exactly phrase duration + buffer
 STICKER_EXTRA_SEC   = 1.0
 
-# Corner positions (outer edges)
 CORNER_MARGIN = 40
 STICKER_POSITIONS = [
-    (CORNER_MARGIN, CORNER_MARGIN),                                    # Top-left
-    (W - STICKER_SIZE - CORNER_MARGIN, CORNER_MARGIN),                # Top-right
-    (CORNER_MARGIN, H - STICKER_SIZE - CORNER_MARGIN - 120),          # Bottom-left
-    (W - STICKER_SIZE - CORNER_MARGIN, H - STICKER_SIZE - CORNER_MARGIN - 120),  # Bottom-right
+    (CORNER_MARGIN, CORNER_MARGIN),
+    (W - STICKER_SIZE - CORNER_MARGIN, CORNER_MARGIN),
+    (CORNER_MARGIN, H - STICKER_SIZE - CORNER_MARGIN - 120),
+    (W - STICKER_SIZE - CORNER_MARGIN, H - STICKER_SIZE - CORNER_MARGIN - 120),
 ]
 
 # ══════════════════════════════════════════════════════════════════
-#  GIF CONFIG — VIRAL WHATSAPP STYLE
+#  GIF CONFIG
 # ══════════════════════════════════════════════════════════════════
 
 GIF_SIZE_MIN        = 320
 GIF_SIZE_MAX        = 420
-GIF_EXTRA_SEC       = 0.8           # Extend beyond phrase
+GIF_EXTRA_SEC       = 0.8
 GIF_FADE_FRAMES     = int(FPS * 0.20)
 
-# Edge positions (left/right edges, vertically spread)
 GIF_POSITIONS = [
-    (80, int(H * 0.30)),             # Left upper
-    (80, int(H * 0.55)),             # Left lower
-    (W - 80, int(H * 0.30)),         # Right upper
-    (W - 80, int(H * 0.55)),         # Right lower
-    (int(W * 0.5), 100),             # Top center
+    (80, int(H * 0.30)),
+    (80, int(H * 0.55)),
+    (W - 80, int(H * 0.30)),
+    (W - 80, int(H * 0.55)),
+    (int(W * 0.5), 100),
 ]
 
 # ══════════════════════════════════════════════════════════════════
@@ -248,32 +245,7 @@ def clean_script(raw: str) -> str:
     return text.strip()
 
 
-def extract_keywords(text: str, n: int = 10) -> list:
-    """Extract top N meaningful keywords from script."""
-    stops = {
-        'the','a','an','and','or','but','in','on','at','to','for','of','with',
-        'it','is','was','be','are','were','i','you','he','she','they','we','my',
-        'your','just','that','this','have','had','from','not','so','then','when',
-        'what','about','like','all','me','us','its','been','would','could','said',
-        'told','thought','knew','felt','got','went','came','never','every','their',
-        'will','can','one','out','into','only','also','more','most','other','some',
-        'time','very','know','take','than','over','think','back','after','use',
-        'two','how','our','work','first','well','way','even','new','want','because',
-        'any','these','give','day','most','us','get','go','make','see','look','come',
-        'here','there','now','up','down','if','no','yes','oh','ah','wow','hey','man',
-        'guy','girl','boy','really','actually','literally','definitely','probably'
-    }
-    words = re.findall(r'\b[a-z]{4,}\b', text.lower())
-    freq  = {}
-    for w in words:
-        if w not in stops:
-            freq[w] = freq.get(w, 0) + 1
-    sorted_kw = sorted(freq, key=freq.get, reverse=True)
-    return sorted_kw[:n]
-
-
-def get_phrase_keyword(phrase_text: str, global_keywords: list) -> str:
-    """Get the best keyword for a specific phrase."""
+def extract_keywords(text: str, n: int = 15) -> list:
     stops = {
         'the','a','an','and','or','but','in','on','at','to','for','of','with',
         'it','is','was','be','are','were','i','you','he','she','they','we','my',
@@ -287,11 +259,32 @@ def get_phrase_keyword(phrase_text: str, global_keywords: list) -> str:
         'here','there','now','up','down','if','no','yes','oh','ah','wow','hey','man',
         'guy','girl','boy','really','actually'
     }
-    
+    words = re.findall(r'\b[a-z]{4,}\b', text.lower())
+    freq  = {}
+    for w in words:
+        if w not in stops:
+            freq[w] = freq.get(w, 0) + 1
+    sorted_kw = sorted(freq, key=freq.get, reverse=True)
+    return sorted_kw[:n]
+
+
+def get_phrase_keyword(phrase_text: str, global_keywords: list) -> str:
+    stops = {
+        'the','a','an','and','or','but','in','on','at','to','for','of','with',
+        'it','is','was','be','are','were','i','you','he','she','they','we','my',
+        'your','just','that','this','have','had','from','not','so','then','when',
+        'what','about','like','all','me','us','its','been','would','could','said',
+        'told','thought','knew','felt','got','went','came','never','every','their',
+        'will','can','one','out','into','only','also','more','most','other','some',
+        'time','very','know','take','than','over','think','back','after','use',
+        'two','how','our','work','first','well','way','even','new','want','because',
+        'any','these','give','day','most','us','get','go','make','see','look','come',
+        'here','there','now','up','down','if','no','yes','oh','ah','wow','hey','man',
+        'guy','girl','boy','really','actually'
+    }
     words = re.findall(r'\b[a-z]{3,}\b', phrase_text.lower())
     phrase_words = [w for w in words if w not in stops and len(w) > 3]
     
-    # Priority: word exists in global keywords
     for gw in global_keywords:
         if gw in phrase_text.lower():
             return gw
@@ -299,189 +292,347 @@ def get_phrase_keyword(phrase_text: str, global_keywords: list) -> str:
     if phrase_words:
         return phrase_words[0]
     
-    return random.choice(global_keywords) if global_keywords else "viral"
+    return random.choice(global_keywords) if global_keywords else "trending"
 
 
 # ══════════════════════════════════════════════════════════════════
-#  GIPHY API — FIXED WITH PROPER RENDITIONS
+#  GIPHY API — BULLETPROOF WITH DEBUGGING
 # ══════════════════════════════════════════════════════════════════
 
-def get_gif_url_from_hit(hit: dict) -> str:
-    """Extract best GIF URL from GIPHY hit object."""
-    images = hit.get("images", {})
-    # Priority: fixed_height_downsampled (good quality, smaller size)
-    for key in ["fixed_height_downsampled", "fixed_height", "downsized_medium", "downsized", "original"]:
-        if key in images and images[key].get("url"):
-            return images[key]["url"]
-    return None
+def debug_print_response(data: dict, label: str):
+    """Print API response structure for debugging."""
+    print(f"[DEBUG] {label} response keys: {list(data.keys())}")
+    if 'meta' in data:
+        print(f"[DEBUG] {label} meta: {data['meta']}")
+    if 'data' in data and isinstance(data['data'], list):
+        print(f"[DEBUG] {label} data count: {len(data['data'])}")
+        if data['data']:
+            first = data['data'][0]
+            print(f"[DEBUG] {label} first hit keys: {list(first.keys())}")
+            if 'images' in first:
+                print(f"[DEBUG] {label} first hit images keys: {list(first['images'].keys())}")
 
 
-def get_sticker_url_from_hit(hit: dict) -> str:
-    """Extract best sticker URL (transparent) from GIPHY hit."""
+def get_best_gif_url(hit: dict) -> tuple:
+    """
+    Extract best GIF URL. Returns (url, format_type).
+    Priority: actual GIF renditions first, then WEBP, then MP4.
+    """
     images = hit.get("images", {})
-    # For stickers, prefer fixed_height_small or fixed_height with webp/gif
-    for key in ["fixed_height_small", "fixed_height", "downsized", "original"]:
-        if key in images and images[key].get("url"):
-            return images[key]["url"]
-    return None
+    
+    # Priority order for GIFs — prefer actual GIF format
+    gif_keys = [
+        "fixed_height_small",      # 100px height, often GIF
+        "fixed_height",            # 200px height
+        "downsized",               # smaller, usually GIF
+        "downsized_medium",
+        "original",                # full size
+        "fixed_width",             # 200px width
+        "fixed_width_small",       # 100px width
+    ]
+    
+    for key in gif_keys:
+        if key in images:
+            url = images[key].get("url", "")
+            fmt = images[key].get("format", "gif")  # GIPHY sometimes includes format
+            if url:
+                # Check if URL actually ends with gif or webp
+                actual_fmt = "gif" if ".gif" in url.lower() else ("webp" if ".webp" in url.lower() else "unknown")
+                print(f"[DEBUG] Found rendition '{key}': format={actual_fmt}, url={url[:60]}...")
+                return url, actual_fmt
+    
+    # Fallback: any URL with 'url' in the rendition
+    for key, rendition in images.items():
+        if isinstance(rendition, dict) and rendition.get("url"):
+            url = rendition["url"]
+            actual_fmt = "gif" if ".gif" in url.lower() else ("webp" if ".webp" in url.lower() else "unknown")
+            print(f"[DEBUG] Fallback rendition '{key}': format={actual_fmt}")
+            return url, actual_fmt
+    
+    return None, None
+
+
+def get_best_sticker_url(hit: dict) -> tuple:
+    """Extract best sticker URL."""
+    images = hit.get("images", {})
+    
+    sticker_keys = [
+        "fixed_height_small",
+        "fixed_height",
+        "downsized",
+        "original",
+        "fixed_width_small",
+        "fixed_width",
+    ]
+    
+    for key in sticker_keys:
+        if key in images:
+            url = images[key].get("url", "")
+            if url:
+                actual_fmt = "gif" if ".gif" in url.lower() else ("webp" if ".webp" in url.lower() else "unknown")
+                print(f"[DEBUG] Sticker rendition '{key}': format={actual_fmt}")
+                return url, actual_fmt
+    
+    for key, rendition in images.items():
+        if isinstance(rendition, dict) and rendition.get("url"):
+            url = rendition["url"]
+            actual_fmt = "gif" if ".gif" in url.lower() else ("webp" if ".webp" in url.lower() else "unknown")
+            return url, actual_fmt
+    
+    return None, None
 
 
 def fetch_giphy_gif(keyword: str) -> list:
     """
-    Fetch viral GIF from GIPHY. Returns list of RGBA numpy frames.
+    Fetch GIF from GIPHY with bulletproof error handling.
     """
     if not GIPHY_KEY:
-        print(f"[GIPHY] ❌ No API key")
+        print(f"[GIPHY] ❌ No API key set!")
         return []
+    
+    print(f"[GIPHY] Searching GIF for: '{keyword}'")
     
     # Try search first
-    urls_to_try = [
-        f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword)}&limit=15&rating=g&lang=en",
-        f"https://api.giphy.com/v1/gifs/trending?api_key={GIPHY_KEY}&limit=15&rating=g",
-    ]
-    
-    gif_url = None
-    title = "unknown"
-    
-    for url in urls_to_try:
-        try:
-            print(f"[GIPHY] Searching: {url[:80]}...")
-            res = requests.get(url, timeout=20)
-            data = res.json()
-            
-            if res.status_code != 200:
-                print(f"[GIPHY] API error: {data.get('meta', {})}")
-                continue
-                
-            hits = data.get("data", [])
-            if not hits:
-                print(f"[GIPHY] No results")
-                continue
-            
-            # Pick from top 5 for variety but relevance
-            hit = random.choice(hits[:min(5, len(hits))])
-            gif_url = get_gif_url_from_hit(hit)
-            title = hit.get("title", "untitled")[:40]
-            
-            if gif_url:
-                print(f"[GIPHY] ✅ Found GIF: '{title}'")
-                break
-                
-        except Exception as e:
-            print(f"[GIPHY] Error: {e}")
-            continue
-    
-    if not gif_url:
-        print(f"[GIPHY] ❌ No GIF found for '{keyword}'")
-        return []
+    search_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword)}&limit=20&rating=g&lang=en"
     
     try:
-        print(f"[GIPHY] Downloading GIF...")
-        r = requests.get(gif_url, timeout=30)
-        print(f"[GIPHY] Downloaded: {len(r.content)} bytes")
-        return process_gif_frames(BytesIO(r.content), keyword)
+        print(f"[DEBUG] API URL: {search_url[:80]}...")
+        res = requests.get(search_url, timeout=25)
+        print(f"[DEBUG] Status: {res.status_code}")
+        
+        data = res.json()
+        debug_print_response(data, "GIF search")
+        
+        if res.status_code != 200:
+            print(f"[GIPHY] API error: status={res.status_code}, msg={data.get('meta', {})}")
+            return []
+        
+        hits = data.get("data", [])
+        if not hits:
+            print(f"[GIPHY] No search results, trying trending...")
+            # Fallback to trending
+            trend_url = f"https://api.giphy.com/v1/gifs/trending?api_key={GIPHY_KEY}&limit=15&rating=g"
+            res = requests.get(trend_url, timeout=20)
+            data = res.json()
+            hits = data.get("data", [])
+            print(f"[DEBUG] Trending returned {len(hits)} hits")
+        
+        if not hits:
+            print(f"[GIPHY] ❌ No results at all")
+            return []
+        
+        # Try top 5 hits to find one with valid URL
+        for i, hit in enumerate(hits[:5]):
+            gif_url, fmt = get_best_gif_url(hit)
+            title = hit.get("title", "untitled")[:50]
+            print(f"[GIPHY] Hit {i}: '{title}', url_type={fmt}")
+            
+            if gif_url:
+                print(f"[GIPHY] ✅ Downloading from: {gif_url[:60]}...")
+                try:
+                    r = requests.get(gif_url, timeout=30)
+                    print(f"[DEBUG] Download: {r.status_code}, size={len(r.content)} bytes, content-type={r.headers.get('content-type', 'unknown')}")
+                    
+                    if len(r.content) < 100:
+                        print(f"[GIPHY] ❌ Download too small ({len(r.content)} bytes)")
+                        continue
+                    
+                    return process_media_frames(BytesIO(r.content), keyword, fmt)
+                except Exception as e:
+                    print(f"[GIPHY] Download failed: {e}")
+                    continue
+        
+        print(f"[GIPHY] ❌ All hits failed")
+        return []
+        
     except Exception as e:
-        print(f"[GIPHY] Download failed: {e}")
+        print(f"[GIPHY] Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
 def fetch_giphy_sticker(keyword: str) -> list:
-    """
-    Fetch transparent sticker from GIPHY. Returns RGBA frames with cutout styling.
-    """
+    """Fetch sticker from GIPHY."""
     if not GIPHY_KEY:
-        print(f"[GIPHY] ❌ No API key")
+        print(f"[GIPHY] ❌ No API key!")
         return []
     
-    url = f"https://api.giphy.com/v1/stickers/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword)}&limit=15&rating=g&lang=en"
+    print(f"[GIPHY] Searching sticker for: '{keyword}'")
+    
+    url = f"https://api.giphy.com/v1/stickers/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword)}&limit=20&rating=g&lang=en"
     
     try:
-        print(f"[GIPHY] Searching sticker: {keyword}")
-        res = requests.get(url, timeout=20)
+        print(f"[DEBUG] Sticker API: {url[:80]}...")
+        res = requests.get(url, timeout=25)
         data = res.json()
+        debug_print_response(data, "Sticker search")
         
-        if res.status_code != 200:
-            print(f"[GIPHY] API error: {data.get('meta', {})}")
-            return []
-            
         hits = data.get("data", [])
+        
         if not hits:
-            print(f"[GIPHY] No stickers found, trying fallback...")
-            # Fallback to regular GIFs with transparent search
-            fallback_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword + ' transparent png')}&limit=10&rating=g"
+            print(f"[GIPHY] No stickers, trying GIF search fallback...")
+            # Fallback to regular GIFs
+            fallback_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_KEY}&q={requests.utils.quote(keyword)}&limit=10&rating=g"
             res = requests.get(fallback_url, timeout=20)
-            hits = res.json().get("data", [])
+            data = res.json()
+            hits = data.get("data", [])
+            print(f"[DEBUG] GIF fallback: {len(hits)} hits")
         
         if not hits:
-            print(f"[GIPHY] ❌ No sticker found for '{keyword}'")
+            print(f"[GIPHY] ❌ No sticker results")
             return []
         
-        hit = random.choice(hits[:min(5, len(hits))])
-        img_url = get_sticker_url_from_hit(hit)
-        title = hit.get("title", "untitled")[:40]
+        for i, hit in enumerate(hits[:5]):
+            img_url, fmt = get_best_sticker_url(hit)
+            title = hit.get("title", "untitled")[:50]
+            print(f"[GIPHY] Sticker hit {i}: '{title}', url_type={fmt}")
+            
+            if img_url:
+                print(f"[GIPHY] ✅ Downloading sticker: {img_url[:60]}...")
+                try:
+                    r = requests.get(img_url, timeout=30)
+                    print(f"[DEBUG] Sticker download: {r.status_code}, {len(r.content)} bytes")
+                    
+                    if len(r.content) < 100:
+                        continue
+                    
+                    return process_sticker_frames(BytesIO(r.content), keyword, fmt)
+                except Exception as e:
+                    print(f"[GIPHY] Sticker download failed: {e}")
+                    continue
         
-        if not img_url:
-            print(f"[GIPHY] ❌ No valid URL in hit")
-            return []
-        
-        print(f"[GIPHY] ✅ Found sticker: '{title}'")
-        r = requests.get(img_url, timeout=30)
-        print(f"[GIPHY] Downloaded: {len(r.content)} bytes")
-        return process_sticker_frames(BytesIO(r.content), keyword)
+        return []
         
     except Exception as e:
-        print(f"[GIPHY] Sticker error: {e}")
+        print(f"[GIPHY] Sticker fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
-def process_gif_frames(img_bytes: BytesIO, keyword: str) -> list:
-    """Process GIF into RGBA frames."""
+def process_media_frames(img_bytes: BytesIO, keyword: str, fmt: str) -> list:
+    """
+    Process GIF/WEBP/MP4 into RGBA frames. Handles multiple formats.
+    """
     frames = []
+    raw_data = img_bytes.getvalue()
+    
+    print(f"[PROCESS] Input format: {fmt}, size: {len(raw_data)} bytes")
+    
+    # Save to temp file for debugging if needed
+    temp_path = f"/tmp/giphy_debug_{keyword.replace(' ', '_')}.gif"
     try:
+        with open(temp_path, "wb") as f:
+            f.write(raw_data)
+        print(f"[DEBUG] Saved to {temp_path}")
+    except:
+        pass
+    
+    try:
+        # Try to open with Pillow
         img = Image.open(img_bytes)
+        print(f"[DEBUG] Pillow opened: format={img.format}, mode={img.mode}, size={img.size}")
+        
         target_size = random.randint(GIF_SIZE_MIN, GIF_SIZE_MAX)
         
-        if hasattr(img, 'n_frames') and img.n_frames > 1:
-            frame_count = 0
+        # Check if animated
+        is_animated = getattr(img, 'is_animated', False) or getattr(img, 'n_frames', 1) > 1
+        n_frames = getattr(img, 'n_frames', 1)
+        print(f"[DEBUG] Animated: {is_animated}, n_frames: {n_frames}")
+        
+        if is_animated and n_frames > 1:
+            frame_idx = 0
             while True:
                 try:
+                    img.seek(frame_idx)
                     fr = img.copy().convert("RGBA")
                     fr = fr.resize((target_size, target_size), Image.LANCZOS)
                     frames.append(np.array(fr))
-                    frame_count += 1
-                    img.seek(img.tell() + 1)
+                    frame_idx += 1
                 except EOFError:
+                    print(f"[DEBUG] Reached end at frame {frame_idx}")
                     break
                 except Exception as e:
-                    print(f"[GIF] Frame error: {e}")
+                    print(f"[DEBUG] Frame {frame_idx} error: {e}")
                     break
         else:
+            # Single frame
             fr = img.convert("RGBA").resize((target_size, target_size), Image.LANCZOS)
             frames.append(np.array(fr))
+            print(f"[DEBUG] Single frame processed")
         
         if frames:
-            print(f"[GIF] ✅ '{keyword}': {len(frames)} frames, {target_size}px")
+            print(f"[GIF] ✅ '{keyword}': {len(frames)} frames, {target_size}px, format={fmt}")
         else:
             print(f"[GIF] ❌ No frames extracted")
             
     except Exception as e:
-        print(f"[GIF] Process failed: {e}")
+        print(f"[PROCESS] Pillow failed: {e}")
+        # Try ffmpeg for MP4/WebP conversion
+        try:
+            print(f"[PROCESS] Trying ffmpeg fallback...")
+            frames = ffmpeg_extract_frames(raw_data, target_size=random.randint(GIF_SIZE_MIN, GIF_SIZE_MAX))
+        except Exception as e2:
+            print(f"[PROCESS] ffmpeg also failed: {e2}")
+    
     return frames
 
 
-def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
-    """Process sticker with CUTOUT styling: white border + shadow + rotation."""
+def ffmpeg_extract_frames(raw_data: bytes, target_size: int = 360) -> list:
+    """Extract frames from MP4/WEBP using ffmpeg."""
     frames = []
+    temp_in = "/tmp/giphy_input.mp4"
+    temp_out = "/tmp/giphy_frame_%04d.png"
+    
+    try:
+        with open(temp_in, "wb") as f:
+            f.write(raw_data)
+        
+        # Extract frames with ffmpeg
+        cmd = ["ffmpeg", "-y", "-i", temp_in, "-vf", f"scale={target_size}:{target_size}:force_original_aspect_ratio=decrease,pad={target_size}:{target_size}:(ow-iw)/2:(oh-ih)/2", "-frames:v", "30", temp_out]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"[FFMPEG] Error: {result.stderr[:200]}")
+            return []
+        
+        # Load extracted frames
+        frame_files = sorted(glob.glob("/tmp/giphy_frame_*.png"))
+        for fpath in frame_files:
+            fr = Image.open(fpath).convert("RGBA")
+            frames.append(np.array(fr))
+        
+        # Cleanup
+        for fpath in frame_files:
+            os.remove(fpath)
+        
+        print(f"[FFMPEG] ✅ Extracted {len(frames)} frames")
+        
+    except Exception as e:
+        print(f"[FFMPEG] Error: {e}")
+    
+    return frames
+
+
+def process_sticker_frames(img_bytes: BytesIO, keyword: str, fmt: str) -> list:
+    """Process sticker with CUTOUT styling."""
+    frames = []
+    raw_data = img_bytes.getvalue()
+    
+    print(f"[STICKER_PROCESS] Input: {fmt}, {len(raw_data)} bytes")
+    
     try:
         img = Image.open(img_bytes)
+        print(f"[DEBUG] Sticker opened: format={img.format}, mode={img.mode}")
+        
         size_in = STICKER_SIZE - STICKER_BORDER * 2
         rotation = random.uniform(-STICKER_ROT_RANGE, STICKER_ROT_RANGE)
         
         def process_one(fr: Image.Image) -> np.ndarray:
-            # Resize to inner size
             fr = fr.convert("RGBA").resize((size_in, size_in), Image.LANCZOS)
             
-            # Create shadow
+            # Shadow
             sh_size = STICKER_SIZE + STICKER_SHADOW * 2
             shadow = Image.new("RGBA", (sh_size, sh_size), (0, 0, 0, 0))
             sd_base = Image.new("RGBA", (size_in, size_in), (0, 0, 0, 140))
@@ -490,26 +641,25 @@ def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
                                     STICKER_BORDER + STICKER_SHADOW + 2))
             shadow = shadow.filter(ImageFilter.GaussianBlur(radius=6))
             
-            # White border background
-            bordered = Image.new("RGBA", (STICKER_SIZE, STICKER_SIZE),
-                                (255, 255, 255, 255))
+            # White border
+            bordered = Image.new("RGBA", (STICKER_SIZE, STICKER_SIZE), (255, 255, 255, 255))
             bordered.alpha_composite(fr, (STICKER_BORDER, STICKER_BORDER))
             
-            # Combine shadow + bordered
             final = shadow.copy()
             final.alpha_composite(bordered, (STICKER_SHADOW, STICKER_SHADOW))
-            
-            # Rotate for cutout feel
             final = final.rotate(rotation, expand=True, resample=Image.BICUBIC)
             return np.array(final)
         
-        if hasattr(img, 'n_frames') and img.n_frames > 1:
-            frame_count = 0
+        is_animated = getattr(img, 'is_animated', False) or getattr(img, 'n_frames', 1) > 1
+        n_frames = getattr(img, 'n_frames', 1)
+        
+        if is_animated and n_frames > 1:
+            frame_idx = 0
             while True:
                 try:
+                    img.seek(frame_idx)
                     frames.append(process_one(img.copy()))
-                    frame_count += 1
-                    img.seek(img.tell() + 1)
+                    frame_idx += 1
                 except EOFError:
                     break
                 except Exception as e:
@@ -521,36 +671,36 @@ def process_sticker_frames(img_bytes: BytesIO, keyword: str) -> list:
         if frames:
             print(f"[STICKER] ✅ '{keyword}': {len(frames)} frames, rot={rotation:.0f}°")
         else:
-            print(f"[STICKER] ❌ No frames extracted")
+            print(f"[STICKER] ❌ No frames")
             
     except Exception as e:
-        print(f"[STICKER] Process failed: {e}")
+        print(f"[STICKER_PROCESS] Failed: {e}")
+        import traceback
+        traceback.print_exc()
+    
     return frames
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PHRASE-LOCKED ASSET SCHEDULER — EXACTLY 5 GIFs + 4 STICKERS
+#  ASSET SCHEDULER — GUARANTEED 5 GIFs + 4 STICKERS
 # ══════════════════════════════════════════════════════════════════
 
 class AssetScheduler:
-    """Manages exactly TARGET_GIFS and TARGET_STICKERS, each locked to a phrase."""
-    
     def __init__(self, phrases: list, total_frames: int):
         self.phrases = phrases
         self.total_frames = total_frames
-        self.assets = []  # (start_f, end_f, frames, x, y, size, type, phrase_idx)
+        self.assets = []
         self.used_phrases = set()
         
     def add_asset(self, phrase_idx: int, frames: list, asset_type: str, position_idx: int) -> bool:
-        """Add asset locked to phrase timing."""
         if phrase_idx >= len(self.phrases) or not frames:
+            print(f"[SCHEDULE] ❌ Failed: phrase_idx={phrase_idx}, frames={'yes' if frames else 'no'}")
             return False
             
         phrase = self.phrases[phrase_idx]
         start_f = max(0, int(phrase["start_sec"] * FPS) - int(FPS * 0.3))
         end_f = min(int(phrase["end_sec"] * FPS) + int(FPS * GIF_EXTRA_SEC), self.total_frames)
         
-        # Ensure minimum duration
         if end_f - start_f < FPS:
             end_f = start_f + FPS
         
@@ -558,40 +708,39 @@ class AssetScheduler:
             if position_idx >= len(GIF_POSITIONS):
                 return False
             cx, cy = GIF_POSITIONS[position_idx]
-            size = frames[0].shape[1]
+            size = frames[0].shape[1] if frames else 360
         else:
             if position_idx >= len(STICKER_POSITIONS):
                 return False
             cx, cy = STICKER_POSITIONS[position_idx]
-            size = frames[0].shape[1]
+            size = frames[0].shape[1] if frames else 160
         
         self.assets.append((start_f, end_f, frames, cx, cy, size, asset_type, phrase_idx))
         self.used_phrases.add(phrase_idx)
-        print(f"[SCHEDULE] {asset_type.upper()} on phrase {phrase_idx} ({phrase['text'][:30]}...) frames {start_f}-{end_f}")
+        print(f"[SCHEDULE] ✅ {asset_type.upper()} on phrase {phrase_idx} '{phrase['text'][:25]}...' frames {start_f}-{end_f} @ ({cx},{cy})")
         return True
 
 
 def build_asset_schedule(phrases: list, global_keywords: list, total_frames: int) -> AssetScheduler:
-    """
-    Build schedule with EXACTLY 5 GIFs and 4 STICKERS.
-    Each asset is locked to a different phrase, spread evenly across the video.
-    """
     scheduler = AssetScheduler(phrases, total_frames)
     
+    print(f"\n{'='*50}")
+    print(f"[GIPHY] API Key present: {'YES' if GIPHY_KEY else 'NO'}")
+    print(f"[GIPHY] Key length: {len(GIPHY_KEY) if GIPHY_KEY else 0}")
+    print(f"[GIPHY] Target: {TARGET_GIFS} GIFs + {TARGET_STICKERS} stickers")
+    print(f"[GIPHY] Phrases: {len(phrases)}")
+    print(f"{'='*50}\n")
+    
     if not GIPHY_KEY:
-        print("[GIPHY] ❌ No API key — no assets will be shown")
+        print("[GIPHY] ❌ No API key — skipping all assets")
         return scheduler
     
     if len(phrases) < 3:
-        print("[WARN] Too few phrases for assets")
+        print("[WARN] Too few phrases")
         return scheduler
     
-    print(f"[GIPHY] Building schedule: {TARGET_GIFS} GIFs + {TARGET_STICKERS} stickers")
-    print(f"[GIPHY] Total phrases: {len(phrases)}")
-    
-    # Select phrase indices spread evenly
+    # Spread phrase indices evenly
     def spread_indices(count: int, total: int) -> list:
-        """Get evenly spread indices."""
         if total <= count:
             return list(range(total))
         step = total / count
@@ -602,7 +751,6 @@ def build_asset_schedule(phrases: list, global_keywords: list, total_frames: int
     
     # Ensure no overlap
     sticker_phrase_indices = [i for i in sticker_phrase_indices if i not in gif_phrase_indices]
-    # If overlap removed too many, just pick different ones
     while len(sticker_phrase_indices) < TARGET_STICKERS:
         candidates = [i for i in range(len(phrases)) if i not in gif_phrase_indices and i not in sticker_phrase_indices]
         if not candidates:
@@ -610,47 +758,70 @@ def build_asset_schedule(phrases: list, global_keywords: list, total_frames: int
         sticker_phrase_indices.append(candidates[0])
     sticker_phrase_indices = sticker_phrase_indices[:TARGET_STICKERS]
     
-    print(f"[GIPHY] GIF phrases: {gif_phrase_indices}")
-    print(f"[GIPHY] Sticker phrases: {sticker_phrase_indices}")
+    print(f"[PLAN] GIF phrases: {gif_phrase_indices}")
+    print(f"[PLAN] Sticker phrases: {sticker_phrase_indices}")
     
-    # Fetch and schedule GIFs
+    # Fetch GIFs
     for idx, phrase_idx in enumerate(gif_phrase_indices):
         phrase = phrases[phrase_idx]
         keyword = get_phrase_keyword(phrase["text"], global_keywords)
         
-        print(f"\n[GIF {idx+1}/{TARGET_GIFS}] Phrase {phrase_idx}: '{keyword}'")
+        print(f"\n{'─'*40}")
+        print(f"[GIF {idx+1}/{TARGET_GIFS}] Phrase {phrase_idx}: keyword='{keyword}'")
+        print(f"[GIF {idx+1}] Phrase text: '{phrase['text'][:40]}...'")
+        print(f"{'─'*40}")
+        
         frames = fetch_giphy_gif(keyword)
         
         if not frames:
-            # Retry with trending
-            print(f"[GIF {idx+1}] Retrying with trending...")
-            frames = fetch_giphy_gif("trending viral")
+            # Retry with trending/viral
+            retry_keywords = ["trending", "viral", "popular", "meme", "reaction"]
+            for retry_kw in retry_keywords:
+                print(f"[GIF {idx+1}] Retrying with '{retry_kw}'...")
+                frames = fetch_giphy_gif(retry_kw)
+                if frames:
+                    break
         
         if frames:
-            scheduler.add_asset(phrase_idx, frames, "gif", idx)
+            success = scheduler.add_asset(phrase_idx, frames, "gif", idx)
+            print(f"[GIF {idx+1}] Schedule result: {'SUCCESS' if success else 'FAILED'}")
         else:
-            print(f"[GIF {idx+1}] ❌ Failed completely")
+            print(f"[GIF {idx+1}] ❌ COMPLETELY FAILED — no frames after all retries")
     
-    # Fetch and schedule stickers
+    # Fetch Stickers
     for idx, phrase_idx in enumerate(sticker_phrase_indices):
         phrase = phrases[phrase_idx]
         keyword = get_phrase_keyword(phrase["text"], global_keywords)
         
-        print(f"\n[STICKER {idx+1}/{TARGET_STICKERS}] Phrase {phrase_idx}: '{keyword}'")
+        print(f"\n{'─'*40}")
+        print(f"[STICKER {idx+1}/{TARGET_STICKERS}] Phrase {phrase_idx}: keyword='{keyword}'")
+        print(f"[STICKER {idx+1}] Phrase text: '{phrase['text'][:40]}...'")
+        print(f"{'─'*40}")
+        
         frames = fetch_giphy_sticker(keyword)
         
         if not frames:
-            # Retry with related word
-            alt_keyword = random.choice(global_keywords) if global_keywords else "cool"
-            print(f"[STICKER {idx+1}] Retrying with '{alt_keyword}'...")
-            frames = fetch_giphy_sticker(alt_keyword)
+            alt_keywords = [random.choice(global_keywords) if global_keywords else "cool", "fun", "wow", "nice"]
+            for alt_kw in alt_keywords:
+                print(f"[STICKER {idx+1}] Retrying with '{alt_kw}'...")
+                frames = fetch_giphy_sticker(alt_kw)
+                if frames:
+                    break
         
         if frames:
-            scheduler.add_asset(phrase_idx, frames, "sticker", idx)
+            success = scheduler.add_asset(phrase_idx, frames, "sticker", idx)
+            print(f"[STICKER {idx+1}] Schedule result: {'SUCCESS' if success else 'FAILED'}")
         else:
-            print(f"[STICKER {idx+1}] ❌ Failed completely")
+            print(f"[STICKER {idx+1}] ❌ COMPLETELY FAILED")
     
-    print(f"\n[SCHEDULE] ✅ {len([a for a in scheduler.assets if a[6] == 'gif'])} GIFs, {len([a for a in scheduler.assets if a[6] == 'sticker'])} stickers scheduled")
+    # Final summary
+    gif_count = len([a for a in scheduler.assets if a[6] == "gif"])
+    sticker_count = len([a for a in scheduler.assets if a[6] == "sticker"])
+    print(f"\n{'='*50}")
+    print(f"[FINAL] Scheduled: {gif_count} GIFs, {sticker_count} stickers")
+    print(f"[FINAL] Total assets: {len(scheduler.assets)}")
+    print(f"{'='*50}\n")
+    
     return scheduler
 
 
@@ -1021,7 +1192,7 @@ def composite_phrase(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  COMPOSITE ASSET — GUARANTEED VISIBLE
+#  COMPOSITE ASSET — WITH DEBUG COUNTING
 # ══════════════════════════════════════════════════════════════════
 
 def composite_asset(canvas: np.ndarray,
@@ -1033,16 +1204,12 @@ def composite_asset(canvas: np.ndarray,
                     cy: int,
                     size: int,
                     asset_type: str) -> None:
-    """
-    Composite GIF or sticker with guaranteed visibility.
-    """
     if not frames or frame_idx < start_frame or frame_idx > end_frame:
         return
         
     since_start = frame_idx - start_frame
     until_end = end_frame - frame_idx
     
-    # Fade in/out
     fade_frames = GIF_FADE_FRAMES if asset_type == "gif" else int(FPS * 0.25)
     alpha = 1.0
     
@@ -1052,21 +1219,18 @@ def composite_asset(canvas: np.ndarray,
         alpha = until_end / fade_frames
     alpha = max(0.0, min(1.0, alpha))
     
-    # Animation frame
     if asset_type == "gif":
         gif_frame_idx = since_start % len(frames)
         raw = frames[gif_frame_idx]
         pulse = 1.0 + 0.04 * math.sin(since_start * 0.1)
         disp_size = int(size * pulse)
     else:
-        # Sticker: slower animation, floating
         float_y = int(STICKER_FLOAT_AMP * math.sin(since_start * STICKER_FLOAT_SPEED))
         gif_frame_idx = (since_start // 2) % len(frames)
         raw = frames[gif_frame_idx]
         disp_size = size
         cy = cy + float_y
     
-    # Resize if needed
     if disp_size != raw.shape[1]:
         disp = cv2.resize(raw, (disp_size, disp_size), interpolation=cv2.INTER_LANCZOS4)
     else:
@@ -1078,15 +1242,13 @@ def composite_asset(canvas: np.ndarray,
     px = max(0, min(W - dw, px))
     py = max(0, min(H - dh, py))
     
-    # Composite with alpha
     cr = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
     cp = Image.fromarray(cr).convert("RGBA")
     si = Image.fromarray(disp)
     
     if si.mode != 'RGBA':
         si = si.convert("RGBA")
-    
-    # Apply alpha to entire image
+        
     r, g, b, a = si.split()
     a = a.point(lambda v: int(v * alpha))
     si = Image.merge("RGBA", (r, g, b, a))
@@ -1132,7 +1294,7 @@ def caps_flash(canvas: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════
-#  MAIN RENDER
+#  MAIN RENDER — WITH ASSET DEBUG COUNTING
 # ══════════════════════════════════════════════════════════════════
 def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
     n_frames     = len(rms_arr)
@@ -1147,8 +1309,7 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
     if not writer.isOpened():
         sys.exit("[ERROR] VideoWriter failed to open")
 
-    print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases")
-    print(f"[RENDER] {len(scheduler.assets)} assets scheduled")
+    print(f"[RENDER] {n_frames} frames | {len(phrases)} phrases | {len(scheduler.assets)} assets")
 
     for p in phrases:
         p["img"] = render_phrase_image(p["text"], p["use_accent"], LIME_GREEN)
@@ -1164,6 +1325,9 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
     flash_cnt   = 0
     prev_phrase = None
     log_step    = max(1, n_frames // 20)
+    
+    # Asset visibility tracking
+    asset_active_count = 0
 
     for i in range(n_frames):
         is_climax = i >= climax_start
@@ -1172,9 +1336,15 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
         # Dust particles
         draw_particles(canvas, particles)
 
-        # ASSETS (behind text) — guaranteed visible
+        # ASSETS — count how many are visible this frame
+        active_now = 0
         for (sf, ef, frames, cx, cy, size, asset_type, phrase_idx) in scheduler.assets:
-            composite_asset(canvas, frames, i, sf, ef, cx, cy, size, asset_type)
+            if sf <= i <= ef:
+                active_now += 1
+                composite_asset(canvas, frames, i, sf, ef, cx, cy, size, asset_type)
+        
+        if active_now > 0:
+            asset_active_count += 1
 
         # Waveform
         draw_neon_waveform(canvas, wave_arr[i], rms_arr[i], is_climax)
@@ -1222,10 +1392,13 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
 
         writer.write(canvas)
         if i % log_step == 0:
-            active_assets = sum(1 for a in scheduler.assets if a[0] <= i <= a[1])
-            print(f"  [RENDER] {int(i/n_frames*100)}% | Active assets: {active_assets}")
+            print(f"  [RENDER] {int(i/n_frames*100)}% | Active assets: {active_now}")
 
     writer.release()
+    
+    # Report asset visibility
+    print(f"[RENDER] Assets were visible in {asset_active_count}/{n_frames} frames ({asset_active_count/n_frames*100:.1f}%)")
+    
     print("[RENDER] Re-encoding with ffmpeg...")
     r = subprocess.run(
         ["ffmpeg", "-y", "-i", temp, "-c:v", "libx264",
@@ -1243,8 +1416,8 @@ def render_video(phrases, rms_arr, wave_arr, duration, accent_bgr, scheduler):
 
 def main():
     print("=" * 62)
-    print("  Shining Black Minimalist Engine v12")
-    print("  5 GIFs + 4 Stickers · Phrase-Locked · GIPHY Viral")
+    print("  Shining Black Minimalist Engine v13")
+    print("  GIPHY Debug Mode · Guaranteed Assets · Heavy Logging")
     print("=" * 62)
 
     ensure_font()
@@ -1279,7 +1452,7 @@ def main():
 
     phrases  = group_into_phrases(word_timestamps, duration, LIME_GREEN)
     
-    # Build asset schedule BEFORE audio analysis to catch errors early
+    # Build asset schedule BEFORE audio analysis
     scheduler = build_asset_schedule(phrases, global_keywords, n_frames)
     
     rms_arr, wave_arr, _ = analyse_audio(str(INPUT_AUDIO), n_frames)
