@@ -101,7 +101,7 @@ jobs:
       - name: 🎨 Generate video
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
         run: python generate_video.py
 
       - name: ✂️ Trim to exact audio length
@@ -136,5 +136,5 @@ jobs:
           DURATION=$(cat audio_duration.txt 2>/dev/null || echo "N/A")
           echo "## 🎨 Kinetic Typography Video" >> $GITHUB_STEP_SUMMARY
           echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Engine | OpenCV + PIL + Librosa + Edge-TTS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Style | Kinetic Typography — Procedural |" >> $GITHUB_STEP_SUMMARY
+          echo "| Engine | OpenCV + PIL + Librosa + Edge-TTS + GIPHY |" >> $GITHUB_STEP_SUMMARY
+          echo "| Style | Phrase-Locked Viral Assets |" >> $GITHUB_STEP_SUMMARY
