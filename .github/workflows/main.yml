@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "script.txt"
+      - "optimization-config.json"
   workflow_dispatch:
 
 jobs:
@@ -49,6 +50,60 @@ jobs:
           fi
           echo "✅ script.txt ($(wc -c < script.txt) bytes)"
           head -3 script.txt
+
+      - name: 🧬 Load optimization config
+        run: |
+          python - <<'PYEOF'
+          import json, os
+          
+          OPT = {
+            "version": "default",
+            "target_duration_seconds": 55,
+            "hook_settings": {
+              "duration_seconds": 3,
+              "style": "statement",
+              "templates": ["This is why...", "The truth about...", "Never..."]
+            },
+            "visual_settings": {
+              "text_animation": "fade",
+              "background": "dark_gradient",
+              "caption_style": "bold_white",
+              "cut_interval_seconds": 2.0,
+              "zoom_on_impact": True,
+              "zoom_intensity": 1.2
+            },
+            "title_optimization": {
+              "preferred_words": ["secret", "truth", "why", "never", "dark"],
+              "max_length": 80,
+              "must_include_hook": True
+            },
+            "content_rules": {
+              "pattern_interrupt_every_seconds": 8,
+              "danger_zone_mitigation": ["zoom", "text_flash", "sound_effect"]
+            },
+            "thumbnail_text_overlay": {
+              "enabled": True,
+              "style": "bold_red",
+              "max_words": 3
+            }
+          }
+          
+          try:
+            with open('optimization-config.json', 'r') as f:
+              loaded = json.load(f)
+              OPT.update(loaded)
+              print(f"✅ Using Gen {OPT['version']}")
+          except Exception as e:
+            print(f"⚠️ Using defaults: {e}")
+          
+          # Save as environment variables for later steps
+          with open(os.environ.get('GITHUB_ENV', '/dev/null'), 'a') as env:
+            env.write(f"OPT_VERSION={OPT['version']}\n")
+            env.write(f"OPT_CUT_INTERVAL={OPT['visual_settings']['cut_interval_seconds']}\n")
+            env.write(f"OPT_ZOOM_INTENSITY={OPT['visual_settings']['zoom_intensity']}\n")
+            env.write(f"OPT_PATTERN_INTERRUPT={OPT['content_rules']['pattern_interrupt_every_seconds']}\n")
+            env.write(f"OPT_TARGET_DURATION={OPT['target_duration_seconds']}\n")
+          PYEOF
 
       - name: ⬇️ Download latest audio artifact
         env:
@@ -102,6 +157,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
+          OPT_VERSION: ${{ env.OPT_VERSION }}
+          OPT_CUT_INTERVAL: ${{ env.OPT_CUT_INTERVAL }}
+          OPT_ZOOM_INTENSITY: ${{ env.OPT_ZOOM_INTENSITY }}
+          OPT_PATTERN_INTERRUPT: ${{ env.OPT_PATTERN_INTERRUPT }}
+          OPT_TARGET_DURATION: ${{ env.OPT_TARGET_DURATION }}
         run: python generate_video.py
 
       - name: ✂️ Trim to exact audio length
@@ -138,3 +198,5 @@ jobs:
           echo "| Duration | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
           echo "| Engine | OpenCV + PIL + Librosa + Edge-TTS + GIPHY |" >> $GITHUB_STEP_SUMMARY
           echo "| Assets | 5 GIFs + 4 Stickers (Phrase-Locked) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Config | ${{ env.OPT_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+            
