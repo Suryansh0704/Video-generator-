@@ -1,21 +1,3 @@
-const fs = require('fs');
-let OPT = {};
-try {
-  OPT = JSON.parse(fs.readFileSync('./optimization-config.json', 'utf8'));
-  console.log('Using Gen', OPT.version);
-} catch(e) {
-  console.log('Using defaults');
-  OPT = {
-    version: 'default',
-    target_duration_seconds: 55,
-    hook_settings: { duration_seconds: 3, style: 'statement' },
-    visual_settings: { text_animation: 'fade', background: 'dark', cut_interval_seconds: 2, zoom_on_impact: true },
-    title_optimization: { preferred_words: ['secret', 'truth', 'why'], max_length: 80 }
-  };
-}
-
-// Then use OPT.target_duration_seconds, OPT.hook_settings.duration_seconds, etc.
-
 name: 🎬 Generate Video
 
 on:
