@@ -1,0 +1,50 @@
+{
+  "version": "1.0.0",
+  "target_duration_seconds": 57,
+  "hook_settings": {
+    "duration_seconds": 3.2,
+    "style": "question",
+    "templates": [
+      "Did you know...",
+      "Why do...",
+      "The secret..."
+    ]
+  },
+  "visual_settings": {
+    "text_animation": "typewriter",
+    "background": "dark_gradient",
+    "caption_style": "bold_yellow",
+    "cut_interval_seconds": 2.62,
+    "zoom_on_impact": true,
+    "zoom_intensity": 1.15,
+    "brightness": 0.04,
+    "contrast": 1.1,
+    "saturation": 1.25,
+    "gamma": 1.05,
+    "fade_in_seconds": 0.4,
+    "fade_out_seconds": 0.5
+  },
+  "title_optimization": {
+    "preferred_words": [
+      "secret",
+      "why",
+      "dark",
+      "hidden",
+      "truth"
+    ],
+    "max_length": 80,
+    "must_include_hook": true
+  },
+  "content_rules": {
+    "pattern_interrupt_every_seconds": 5,
+    "danger_zone_mitigation": [
+      "zoom",
+      "color_shift"
+    ]
+  },
+  "thumbnail_text_overlay": {
+    "enabled": true,
+    "style": "bold_white",
+    "max_words": 5
+  }
+}
