@@ -1,8 +1,8 @@
 {
   "version": "1.0.0",
-  "target_duration_seconds": 60,
+  "target_duration_seconds": 55,
   "hook_settings": {
-    "duration_seconds": 3.3,
+    "duration_seconds": 3.0,
     "style": "question",
     "templates": [
       "Did you know...",
@@ -14,7 +14,7 @@
     "text_animation": "typewriter",
     "background": "dark_gradient",
     "caption_style": "bold_yellow",
-    "cut_interval_seconds": 2.75,
+    "cut_interval_seconds": 2.5,
     "zoom_on_impact": true,
     "zoom_intensity": 1.15,
     "brightness": 0.04,
